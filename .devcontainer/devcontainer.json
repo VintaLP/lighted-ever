@@ -1,0 +1,32 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+{
+	"name": "ever",
+	"image": "ever",
+	"mounts": [
+		{
+			"source": "/",
+			"target": "/data/",
+			"type": "bind"
+		}
+	],
+	"runArgs": [
+		"--gpus",
+		"all",
+		"--network=host",
+		"-v",
+		"/tmp/NVIDIA:/tmp/NVIDIA",
+		"-e",
+		"NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-vscode.cmake-tools",
+				"ms-vscode.cpptools",
+				"shader-slang.slang-language-extension"
+			]
+		}
+	}
+}
