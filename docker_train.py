@@ -41,6 +41,7 @@ def main():
         "docker", "run", "--rm", "--gpus", "all",
         "-v", "/tmp/NVIDIA:/tmp/NVIDIA",
         # "--user", "$(id -u):$(id -g)",
+        "--runtime=nvidia",
         "-e", "NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility",
         # Mount the scene/dataset directory and model_path
         "-v", f"{known_args.scene}:/data/dataset",
