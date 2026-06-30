@@ -15,6 +15,7 @@
 
 import torch
 import math
+import matplotlib.pyplot as plt
 
 from scene.gaussian_model import GaussianModel
 from ever.splinetracers.fast_ellipsoid_splinetracer import trace_rays
@@ -23,6 +24,15 @@ MAX_ITERS = 400
 from kornia import create_meshgrid
 import numpy as np
 from scene.dataset_readers import ProjectionType
+import cv2
+import io
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import atexit
+
+
+video_writer = cv2.VideoWriter('normals_training.avi', cv2.VideoWriter_fourcc(*'XVID'), 30, (800, 800))
+
+atexit.register(video_writer.release)
 
 def get_ray_directions(H, W, focal, center=None, random=True):
     """
@@ -146,6 +156,133 @@ def _eval_sh2_scalar(coeffs, dirs):
     ], dim=-1)                                             # [N, 9]
     return (coeffs * basis).sum(dim=-1)                   # [N]
 
+def debug_visualize_light_normals(pc, num_samples=500):
+    # 1. Daten extrahieren
+    sh_coeffs = pc.get_sh_normals.detach()
+    points = pc.get_xyz.detach()
+    
+    # 2. Normalen extrahieren
+    nx = sh_coeffs[:, 3]
+    ny = sh_coeffs[:, 1]
+    nz = sh_coeffs[:, 2]
+    _normals = torch.stack([nx, ny, nz], dim=1)
+    norm = torch.norm(_normals, dim=-1, keepdim=True).clamp(min=1e-8)
+    normals = _normals / norm
+    
+    # 3. Stichprobe für Performance
+    idx = np.random.choice(points.shape[0], min(num_samples, points.shape[0]), replace=False)
+    p = points[idx].cpu()
+    n = normals[idx].cpu()
+
+    # 4. Plotten
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Punkte und Normalen-Pfeile
+    ax.scatter(p[:,0], p[:,1], p[:,2], s=2, c='gray', alpha=0.3)
+    ax.quiver(p[:,0], p[:,1], p[:,2], n[:,0], n[:,1], n[:,2], 
+              length=1, color='red', alpha=0.8)
+    
+    center = np.mean(p.numpy(), axis=0)
+    range_val = 3.0 
+    ax.set_xlim(center[0] - range_val, center[0] + range_val)
+    ax.set_ylim(center[1] - range_val, center[1] + range_val)
+    ax.set_zlim(center[2] - range_val, center[2] + range_val)
+
+    plt.title("Visualisierung der Oberflächennormalen (SH-Kodiert)")
+    plt.show()
+
+def add_normal_frame_to_video(pc, iteration):
+    # Daten extrahieren
+    sh_coeffs = pc.get_sh_normals.detach()
+    points = pc.get_xyz.detach()
+    
+    # Normalen extrahieren
+    nx = sh_coeffs[:, 3]
+    ny = sh_coeffs[:, 1]
+    nz = sh_coeffs[:, 2]
+    _normals = torch.stack([nx, ny, nz], dim=1)
+    norm = torch.norm(_normals, dim=-1, keepdim=True).clamp(min=1e-8)
+    n = (_normals / norm).cpu().numpy()
+    p = points.cpu().numpy()
+    
+    # Stichprobe
+    idx = np.random.choice(p.shape[0], min(500, p.shape[0]), replace=False)
+    
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Plotten
+    ax.scatter(p[idx,0], p[idx,1], p[idx,2], s=2, c='gray', alpha=0.3)
+    ax.quiver(p[idx,0], p[idx,1], p[idx,2], n[idx,0], n[idx,1], n[idx,2], 
+              length=0.1, color='red', alpha=0.8)
+    
+    center = np.mean(p, axis=0)
+    range_val = 2.0 
+    ax.set_xlim(center[0] - range_val, center[0] + range_val)
+    ax.set_ylim(center[1] - range_val, center[1] + range_val)
+    ax.set_zlim(center[2] - range_val, center[2] + range_val)
+
+    
+    ax.view_init(elev=30, azim=45) 
+    ax.set_title(f"Iteration: {iteration}")
+    
+    # In Video schreiben
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    rgba_buffer = canvas.buffer_rgba()
+    img = np.asarray(rgba_buffer)
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+    
+    if img_bgr.shape[:2] != (800, 800):
+        print(f"rezised images from: {img_bgr.shape} to 800, 800")
+        img_bgr = cv2.resize(img_bgr, (800, 800))
+        
+    video_writer.write(img_bgr)
+    plt.close(fig)
+
+
+def add_normal_frame_to_tensorboard(pc, iteration, writer):
+    sh_coeffs = pc.get_sh_normals.detach()
+    points = pc.get_xyz.detach()
+    
+    nx = sh_coeffs[:, 3]
+    ny = sh_coeffs[:, 1]
+    nz = sh_coeffs[:, 2]
+    _normals = torch.stack([nx, ny, nz], dim=1)
+    norm = torch.norm(_normals, dim=-1, keepdim=True).clamp(min=1e-8)
+    n = (_normals / norm).cpu().numpy()
+    p = points.cpu().numpy()
+    
+    idx = np.random.choice(p.shape[0], min(500, p.shape[0]), replace=False)
+    
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    ax.scatter(p[idx,0], p[idx,1], p[idx,2], s=2, c='gray', alpha=0.3)
+    ax.quiver(p[idx,0], p[idx,1], p[idx,2], n[idx,0], n[idx,1], n[idx,2], 
+              length=0.1, color='red', alpha=0.8)
+    
+    center = np.mean(p, axis=0)
+    range_val = 2.0 
+    ax.set_xlim(center[0] - range_val, center[0] + range_val)
+    ax.set_ylim(center[1] - range_val, center[1] + range_val)
+    ax.set_zlim(center[2] - range_val, center[2] + range_val)
+
+    
+    ax.view_init(elev=30, azim=45) 
+    ax.set_title(f"Iteration: {iteration}")
+    
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    rgba_buffer = canvas.buffer_rgba()
+    img = np.asarray(rgba_buffer)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+    
+    img_chw = img_rgb.transpose(2, 0, 1)
+        
+    writer.add_image('Normalen_Visualisierung', img_chw, iteration)
+    plt.close(fig)
 
 def compute_comoving_light_color(pc, view, light_offsets):
     """
@@ -187,18 +324,18 @@ def compute_comoving_light_color(pc, view, light_offsets):
         dist          = to_gaussian.norm(dim=-1).clamp(min=1e-8)         # [N]
         to_gaussian_n = to_gaussian / dist.unsqueeze(-1)
 
-        #inv_sq = 1.0 / (4 * np.pi * dist.pow(2)) # Inverse-Square-Law
-        inv_sq = 1.0
+        inv_sq = 1.0 / (4 * np.pi * dist.pow(2)) # Inverse-Square-Law
+        #inv_sq = 1.0
         raw_sh = _eval_sh2_scalar(sh_normals, to_gaussian_n)              
         lambert = torch.sigmoid(raw_sh)
 
-        light_power = 12.5 # test value
+        light_power = 40000 # test value
 
         contrib = (light_power * inv_sq * lambert).unsqueeze(-1)          # [N, 1]
         total_irradiance += contrib
         
-    print(f"Total irradiance: {total_irradiance}")
-    print(f"Albedo: {albedo}")
+    #print(f"Total irradiance: {total_irradiance}")
+    #print(f"Albedo: {albedo}")
     net_color = (albedo / math.pi) * total_irradiance    
     return net_color
 
@@ -212,6 +349,8 @@ def splinerender(
     tmin=None,
     tmax=1e7,
     mode="lighted", #lpc
+    debug_iteration=0,
+    writer=None
 ):
     device = pc.get_xyz.device
     if view.model == ProjectionType.PERSPECTIVE:
@@ -226,13 +365,15 @@ def splinerender(
     scales *= scaling_modifier
     
     if(mode=="lighted"):
-        
+        if(debug_iteration%100==1 and writer!=None):
+            add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
+            add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
     elif(mode=="no_lighting"):
         ambient_intensity = 1 #lpc
         net_color = pc.get_albedo * ambient_intensity #lpc
-    elif(mode=="normals"):
-        
+    elif(mode=="normals"):  
+
         raw_normals = pc.get_sh_normals[:, :3] #lpc
         norm = torch.norm(raw_normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
         normalized_normals = raw_normals / norm #lpc
