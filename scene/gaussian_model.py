@@ -23,7 +23,7 @@ from utils.graphics_utils import BasicPointCloud
 from icecream import ic
 from scene import sphere_init
 
-MAX_PRIMITIVES = 8_000_000
+MAX_PRIMITIVES = 200_000
 
 @torch.jit.script
 def inv_opacity(y):
@@ -496,6 +496,11 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_albedo, new_sh_normals, new_opacities, new_scaling, new_rotation):
+        
+        if torch.isnan(new_sh_normals).any() or torch.isinf(new_sh_normals).any():
+            ic("ACHTUNG: Ungültige Werte in neuen SH-Normals erkannt!")
+        
+        
         d = {"xyz": new_xyz,
         #"f_dc": new_features_dc,
         #"f_rest": new_features_rest,
@@ -548,6 +553,7 @@ class GaussianModel:
         #new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_albedo = self._albedo[selected_pts_mask].repeat(N, 1)
         new_sh_normals = self._sh_normals[selected_pts_mask].repeat(N, 1)
+
 
         # halve opacity given new scaling
         minor_axis = div_scaling.min(dim=-1, keepdim=True).values * 2

@@ -29,6 +29,7 @@ import cv2
 import numpy as np
 from typing import List
 from torch.optim.lr_scheduler import ExponentialLR, LinearLR, ChainedScheduler
+from datetime import datetime
 
 from scene.dataset_readers import ProjectionType
 
@@ -104,7 +105,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
 
                     light_offset = scene.light_offset
-                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifer=scaling_modifer ,random=False, tmin=0)["render"]
+                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer)["render"]
                     net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     net_image_bytes = memoryview(net_image)
@@ -134,7 +135,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
 
         light_offset = scene.light_offset #lpc
 
-        render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel)
+        render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer)
         image, densification_metric, visibility_filter, radii = render_pkg["render"], render_pkg["densification_metric"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.gt_alpha_mask is not None:
@@ -223,10 +224,21 @@ def prepare_output_and_logger(args):
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
+    
+    try:
+        # Ordner für alle lesbar und schreibbar machen (ggf. 777 oder 775)
+        os.chmod(args.model_path, 0o777)
+        # Besitzer auf deinen Host-User ändern (1000:1000)
+        import subprocess
+        subprocess.run(["chown", "-R", "1000:1000", args.model_path])
+    except Exception as e:
+        print(f"Cant set permissions directly: {e}")
+
+
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
@@ -259,7 +271,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
                     light_offset = renderArgs[0] if len(renderArgs) > 0 else torch.zeros(3) #lpc
-                    render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False) #lpc
+                    render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer) #lpc
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0) #lpc
                     
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -291,8 +303,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 100, 1_000, 1500, 2_000, 3000, 4_000, 7_000, 11_000, 16_000, 22_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000,2_000,7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 100, 1_000, 1499,1600,1601,1610,1650,1670,1700,1900,3000, 4_000, 7_000, 11_000, 16_000, 22_000, 30_000, 35_000, 40_000, 50_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000,1499,1600,1601,1610,1650,1670,1700,1900,2_000,4_000,7_000, 30_000, 40_00, 50_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -309,5 +321,19 @@ if __name__ == "__main__":
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
-
+   
+    if os.path.exists(args.model_path):
+        try:
+            print(f"\nKorrektur der Dateiberechtigungen für: {args.model_path}")
+            import subprocess
+            subprocess.run(["chown", "-R", "1000:1000", args.model_path], check=True)
+            print("Erledigt!")
+        except Exception as e:
+            print(f"Fehler: {e}")
+   
+   
+   
+   
+   
+   
     # All done

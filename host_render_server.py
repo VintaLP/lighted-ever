@@ -16,7 +16,7 @@
 import os
 import torch
 import sys
-from scene import GaussianModel
+from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, OptimizationParams
@@ -52,7 +52,10 @@ except ImportError:
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
-    gaussians = GaussianModel(dataset.sh_degree, dataset.use_neural_network, dataset.max_opacity)
+    gaussians = GaussianModel(dataset.sh_degree)
+    scene = Scene(dataset, gaussians, shuffle=True)
+    gaussians.training_setup(opt)
+    
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -70,8 +73,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    
 
-    gaussians.training_setup(opt)
+
     torch.cuda.empty_cache()
     st = time.time()
 
@@ -93,8 +97,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     custom_cam.image_width = image_width // PREVIEW_RES_FACTOR
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
 
-                    st = time.time()                    
-                    net_image = splinerender(custom_cam, gaussians)["render"]
+                    st = time.time()   
+                    light_offset = scene.light_offset
+                 
+                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0)["render"]
 
                     # net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
                     print(f"{1/(time.time()-st)}", end='\r')

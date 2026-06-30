@@ -75,7 +75,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cpu"
         self.use_neural_network = False
         self.eval = False
-        self.num_additional_pts = 10000
+        self.num_additional_pts = 1
         self.additional_size_multi = 1.0
         self.num_spline_frames = 480
         self.max_opacity = 0.99
@@ -101,7 +101,7 @@ class PipelineParams(ParamGroup):
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 30_000
+        self.iterations = 50_000
 
         self.betas = [0.9, 0.999]
 
@@ -112,11 +112,13 @@ class OptimizationParams(ParamGroup):
 
         self.feature_lr = 0.0025
         self.feature_rest_lr = 0.00025
-        self.normal_lr = 0.0025
+        self.normal_lr = 0.001
         self.bg_lr = 0.0
         self.opacity_lr = 0.0125
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
+        self.min_split_opacity = 0.01
+
         self.min_opacity = 0.005
         self.percent_dense = 0.001
         self.lambda_dssim = 0.2

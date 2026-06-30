@@ -1,32 +1,32 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
-// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+
 {
-	"name": "ever",
-	"image": "ever",
-	"mounts": [
-		{
-			"source": "/",
-			"target": "/data/",
-			"type": "bind"
-		}
-	],
-	"runArgs": [
-		"--gpus",
-		"all",
-		"--network=host",
-		"-v",
-		"/tmp/NVIDIA:/tmp/NVIDIA",
-		"-e",
-		"NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"
-	],
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"ms-python.python",
-				"ms-vscode.cmake-tools",
-				"ms-vscode.cpptools",
-				"shader-slang.slang-language-extension"
-			]
-		}
-	}
+    "name": "lighted-ever",
+    "build": {
+        "context": "..",
+        "dockerfile": "../Dockerfile"
+    },
+    "runArgs": [
+        "--gpus", "all",
+        "--runtime=nvidia"
+    ],
+    "mounts": [
+    "source=/home/fynn/Documents/masterarbeit/blender_output,target=/data/dataset,type=bind",
+    "source=/home/fynn/Documents/masterarbeit/ever_output,target=/data/outputs,type=bind"
+    ],
+    "workspaceMount": "source=${localWorkspaceFolder},target=/ever_training,type=bind",
+    "workspaceFolder": "/ever_training",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/conda/envs/ever/bin/python",
+                "python.terminal.activateEnvironment": true
+            },
+            "extensions": [
+                "ms-python.python",
+                "ms-python.debugpy"
+            ]
+        }
+    },
+    "remoteUser": "root",
+    "postCreateCommand": "echo 'source activate ever' >> ~/.bashrc && chown -R 1000:1000 /data/outputs"
 }
