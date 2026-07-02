@@ -208,14 +208,19 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     torch.cuda.empty_cache()
 
 
+
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
             if (iteration in checkpoint_iterations):
+
+                checkpoint_dir = os.path.join(scene.model_path, "checkpoints")
+                os.makedirs(checkpoint_dir, exist_ok=True)
+                save_path = os.path.join(checkpoint_dir, f"checkpoint_{iteration}.pth")
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save((gaussians.capture(), iteration), save_path)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -306,7 +311,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 100, 1_000, 1499,1600,1601,1610,1650,1670,1700,1900,3000, 4_000, 7_000, 11_000, 16_000, 22_000, 30_000, 35_000, 40_000, 50_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000,1499,1600,1601,1610,1650,1670,1700,1900,2_000,4_000,7_000, 30_000, 40_00, 50_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[1_000,7_000,10_000,30_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -316,6 +321,18 @@ if __name__ == "__main__":
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
+
+   
+
+    if not args.start_checkpoint.endswith(".pth"):
+        args.start_checkpoint += ".pth"
+    
+    if args.start_checkpoint.endswith("None.pth"): 
+        args.start_checkpoint = None
+
+    if args.start_checkpoint and not os.path.exists(args.start_checkpoint):
+                print(f"Warning: Checkpoint {args.start_checkpoint} not found. Starting without Checkpoint.")
+                args.start_checkpoint = None
 
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
