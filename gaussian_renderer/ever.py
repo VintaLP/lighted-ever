@@ -132,7 +132,7 @@ def camera2rays(view, **kwargs):
     rays_o = (rays_o).contiguous()
     return rays_o, rays_d
 
-def _eval_sh2_scalar(coeffs, dirs):
+def _eval_sh2_scalar(coeffs, dirs, degree=2):
     """
     Antons function
     Evaluate degree-2 SH at unit directions dirs [N,3].
@@ -143,6 +143,17 @@ def _eval_sh2_scalar(coeffs, dirs):
     """
     x, y, z = dirs[:, 0], dirs[:, 1], dirs[:, 2]
     # Standard real SH basis Y_l^m, order: Y00, Y1-1,Y10,Y11, Y2-2,Y2-1,Y20,Y21,Y22
+    
+    if degree == 1:
+        basis = torch.stack([
+            torch.ones_like(x) * 0.2820948,                   # Y00
+            0.4886025 * y,                                     # Y1-1
+            0.4886025 * z,                                     # Y10
+            0.4886025 * x,                                     # Y11
+        ], dim=-1)                                             # [N, 4]
+        return (coeffs[:4] * basis).sum(dim=-1)
+
+
     basis = torch.stack([
         torch.ones_like(x) * 0.2820948,                   # Y00
         0.4886025 * y,                                     # Y1-1
@@ -154,6 +165,7 @@ def _eval_sh2_scalar(coeffs, dirs):
         1.0925484 * x * z,                                 # Y21
         0.5462742 * (x*x - y*y),                          # Y22
     ], dim=-1)                                             # [N, 9]
+
     return (coeffs * basis).sum(dim=-1)                   # [N]
 
 def debug_visualize_light_normals(pc, num_samples=500):
@@ -284,7 +296,7 @@ def add_normal_frame_to_tensorboard(pc, iteration, writer):
     writer.add_image('Normalen_Visualisierung', img_chw, iteration)
     plt.close(fig)
 
-def compute_comoving_light_color(pc, view, light_offsets):
+def compute_comoving_light_color(pc, view, light_offsets, writer=None):
     """
     Berechnet das Co-Moving Light mit gelernten Normalen (Ohne Wasser-Effekte).
     
@@ -298,7 +310,7 @@ def compute_comoving_light_color(pc, view, light_offsets):
 
     device = gxyz.device
 
-    c2w         = torch.linalg.inv(view.world_view_transform.T.cuda())
+    c2w  = torch.linalg.inv(view.world_view_transform.T.cuda())
 
     #light intemsity per point
     total_irradiance = torch.zeros_like(gxyz)
@@ -334,8 +346,6 @@ def compute_comoving_light_color(pc, view, light_offsets):
         contrib = (light_power * inv_sq * lambert).unsqueeze(-1)          # [N, 1]
         total_irradiance += contrib
         
-    #print(f"Total irradiance: {total_irradiance}")
-    #print(f"Albedo: {albedo}")
     net_color = (albedo / math.pi) * total_irradiance    
     return net_color
 
@@ -365,9 +375,9 @@ def splinerender(
     scales *= scaling_modifier
     
     if(mode=="lighted"):
-        if(debug_iteration%100==1 and writer!=None):
-            add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
-            add_normal_frame_to_video(pc, debug_iteration)
+        #if(debug_iteration%100==1 and writer!=None):
+            #add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
+            #add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
     elif(mode=="no_lighting"):
         ambient_intensity = 1 #lpc
