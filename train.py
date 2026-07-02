@@ -93,7 +93,8 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
             try:
                 net_image_bytes = None
                 # custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-                custom_cam, do_training, _, _, keep_alive, scaling_modifer = network_gui.receive()
+                
+                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer = network_gui.receive()
                 if custom_cam != None:
                     viewpoint_cam = train_cameras[0]
                     # custom_cam.model = viewpoint_cam.model
@@ -103,9 +104,9 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     image_height = custom_cam.image_height
                     custom_cam.image_width = image_width // PREVIEW_RES_FACTOR
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
-
+                    custom_cam.colmap_id = 2 if switch_camera else 1 
                     light_offset = scene.light_offset
-                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer)["render"]
+                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer, mode=("no_lighting" if show_unlit else "lighted"))["render"]                    
                     net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     net_image_bytes = memoryview(net_image)
