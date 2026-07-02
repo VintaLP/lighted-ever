@@ -307,7 +307,7 @@ def compute_comoving_light_color(pc, view, light_offsets, writer=None):
     sh_normals = pc.get_sh_normals 
     gxyz       = pc.get_xyz    
     albedo     = pc.get_albedo
-
+    light_offset = light_offsets[view.colmap_id-1][1:]
     device = gxyz.device
 
     c2w  = torch.linalg.inv(view.world_view_transform.T.cuda())
@@ -315,15 +315,15 @@ def compute_comoving_light_color(pc, view, light_offsets, writer=None):
     #light intemsity per point
     total_irradiance = torch.zeros_like(gxyz)
 
-    if not isinstance(light_offsets, torch.Tensor):
-        offsets_tensor = torch.tensor(light_offsets, dtype=torch.float32, device=device)
+    if not isinstance(light_offset, torch.Tensor):
+        offset_tensor = torch.tensor(light_offset, dtype=torch.float32, device=device)
     else:
-        offsets_tensor = light_offsets.to(device=device, dtype=torch.float32)
+        offset_tensor = light_offset.to(device=device, dtype=torch.float32)
     
-    if offsets_tensor.ndim == 1:
-        offsets_tensor = offsets_tensor.unsqueeze(0)
+    if offset_tensor.ndim == 1:
+        offset_tensor = offset_tensor.unsqueeze(0)
 
-    for offset in offsets_tensor:
+    for offset in offset_tensor:
         #light position
         hom_light_pos = torch.cat([offset, torch.tensor([1.0], device=device)])
         

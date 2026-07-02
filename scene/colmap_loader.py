@@ -297,22 +297,27 @@ def read_light_positions_text(path):
     """
     Reads realtive light position text file 
     """
-    light_offset = np.array([0.0, 0.0, 0.0])
+    light_offset = [np.array([1,0, 0.0, 0.0, 0.0])]
     
     if not os.path.exists(path):
-        print(f"[Warning] Keine Lichtdatei unter {path} gefunden. Nutze [0,0,0].")
+        print(f"[Warning] Keine Lichtdatei unter {path} gefunden. Nutze [1,0,0,0].")
         return light_offset
 
     with open(path, "r") as fid:
 
         header = fid.readline()
-        
-        # Zweite Zeile enthält die Daten
-        data_line = fid.readline()
-        if data_line:
-            elems = data_line.strip().split(",")
-            if len(elems) == 3:
-                light_offset = np.array([float(elems[0]), float(elems[1]), float(elems[2])])
-                print(f"[Ever Loader] Relative Lichtposition erfolgreich geladen: {light_offset}")
+        try:
+            while True:
                 
+                # Zweite Zeile enthält die Daten
+                data_line = fid.readline()
+                if data_line:
+                    elems = data_line.strip().split(",")
+                    if len(elems) == 4:
+                        light_offset.append(np.array([int(elems[0]), float(elems[1]), float(elems[2]), float(elems[3])]))
+                        print(f"[Ever Loader] Relative Lichtposition erfolgreich geladen: {light_offset}")
+                else:
+                    break        
+        except StopIteration:
+                        print("Read all relative light positions")       
     return light_offset

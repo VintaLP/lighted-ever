@@ -52,7 +52,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
-    light_offset: np.array = np.array([0.0, 0.0, 0.0]) #lpc
+    light_offset: np.array = np.array([1, 0.0, 0.0, 0.0]) #lpc
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -98,6 +98,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
     else:
         metadata = None
     cam_infos = []
+
+
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
         # the exact output you're looking for:
@@ -105,6 +107,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
         sys.stdout.flush()
 
         extr = cam_extrinsics[key]
+
         intr = cam_intrinsics[extr.camera_id]
         height = intr.height
         width = intr.width
@@ -140,8 +143,9 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
             FovX = focal2fov(focal_length_x, width)
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
-
-        image_path = os.path.join(images_folder, os.path.basename(extr.name))
+        camera_folder = "cam_" + str(extr.camera_id)
+        camera_image_path = os.path.join(images_folder, camera_folder)
+        image_path = os.path.join(camera_image_path, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
         image_path = image_path.replace(" ", "_")
         image = None
@@ -178,8 +182,7 @@ def storePly(path, xyz, rgb):
     vertex_element = PlyElement.describe(elements, 'vertex')
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
-
-def readColmapSceneInfo(path, images, eval, llffhold=8):
+def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -222,24 +225,46 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     except:
         pcd = None
 
-    light_offset = np.array([0.0, 0.0, 0.0]) # lpc
+    light_offset = [] # lpc
     light_file_path = os.path.join(path, "light_positions.txt") #lpc
     
     #----- lpc --------------------------------
-    if os.path.exists(light_file_path):
-        try:
-            with open(light_file_path, "r") as fid:
-                _ = fid.readline() #skip header
-                data_line = fid.readline()
-                if data_line:
-                    elems = data_line.strip().split(",")
-                    if len(elems) == 3:
-                        light_offset = np.array([float(elems[0]), float(elems[1]), float(elems[2])])
-                        print(f"\n[Ever Loader] Loaded Light Offset coordinates: {light_offset}")
-        except Exception as e:
-            print(f"\n[Ever Loader] Error while loading Light Offset {e}. Use [0,0,0].")
+    if rig:
+        if os.path.exists(light_file_path):
+            try:
+                with open(light_file_path, "r") as fid:                
+                    _ = fid.readline() #skip header
+                    try:
+                        while True:
+                            data_line = fid.readline()
+                            if data_line:
+                                elems = data_line.strip().split(",")
+                                if len(elems) == 4:
+                                    light_offset.append(np.array([int(elems[0]), float(elems[1]), float(elems[2]), float(elems[3])]))
+                                    print(f"\n[Ever Loader] Loaded Light Offset: {light_offset}")
+                            else:
+                                break        
+                    except StopIteration:
+                        print("Read all relative light positions")                 
+            except Exception as e:
+                print(f"\n[Ever Loader] Error while loading Light Offset {e}. Use [1,0,0,0].")
+        else:
+            print(f"\n[Ever Loader] light_position.txt not found. Use [1,0,0,0].")
     else:
-        print(f"\n[Ever Loader] light_position.txt not found. Use [0,0,0].")
+        if os.path.exists(light_file_path):
+            try:
+                with open(light_file_path, "r") as fid:                
+                    _ = fid.readline() #skip header
+                    data_line = fid.readline()
+                    if data_line:
+                        elems = data_line.strip().split(",")
+                        if len(elems) == 3:
+                            light_offset = np.array([float(elems[0]), float(elems[1]), float(elems[2])])
+                            print(f"\n[Ever Loader] Loaded Light Offset: {light_offset}")                
+            except Exception as e:
+                print(f"\n[Ever Loader] Error while loading Light Offset {e}. Use [0,0,0].")
+        else:
+            print(f"\n[Ever Loader] light_position.txt not found. Use [0,0,0].")         
     #--------------------------------------------
 
     scene_info = SceneInfo(point_cloud=pcd,
