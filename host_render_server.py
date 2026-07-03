@@ -104,7 +104,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if do_training:
                         mode=("no_lighting" if show_unlit else "lighted")
                     else:
-                        mode="only_brightness"    
+                        mode=("only_brightness" if show_unlit else "normals")
 
                     net_image = splinerender(custom_cam, gaussians, pipe, light_offset,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0, mode=mode)["render"]
 
