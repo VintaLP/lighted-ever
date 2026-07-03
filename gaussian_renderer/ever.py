@@ -257,15 +257,17 @@ def add_normal_frame_to_video(pc, iteration):
 
 
 def add_normal_frame_to_tensorboard(pc, iteration, writer):
-    sh_coeffs = pc.get_sh_normals.detach()
+    polar_normals = pc.get_polar_normals.detach()
     points = pc.get_xyz.detach()
     
-    nx = sh_coeffs[:, 3]
-    ny = sh_coeffs[:, 1]
-    nz = sh_coeffs[:, 2]
-    _normals = torch.stack([nx, ny, nz], dim=1)
-    norm = torch.norm(_normals, dim=-1, keepdim=True).clamp(min=1e-8)
-    n = (_normals / norm).cpu().numpy()
+    theta = polar_normals[:, 0]
+    phi = polar_normals[:, 1]
+
+    normals = torch.stack([torch.sin(theta) * torch.cos(phi), torch.sin(theta) * torch.sin(phi), torch.cos(theta)], dim=1)
+    
+    
+    norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
+    n = (normals / norm).cpu().numpy()
     p = points.cpu().numpy()
     
     idx = np.random.choice(p.shape[0], min(500, p.shape[0]), replace=False)
@@ -306,7 +308,7 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
     view:          camera object
     light_offsets: list of light position relative to the camera e.g. [[-0.1, 0.0, 0.0], [0.1, 0.0, 0.0]]
     """
-    sh_normals = pc.get_sh_normals 
+    polar_normals = pc.get_polar_normals
     gxyz       = pc.get_xyz    
     albedo     = pc.get_albedo
     light_offset = light_offsets[view.colmap_id-1][1:]
@@ -340,8 +342,16 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
 
         inv_sq = 1.0 / (4 * np.pi * dist.pow(2)) # Inverse-Square-Law
         #inv_sq = 1.0
-        raw_sh = _eval_sh2_scalar(sh_normals, to_gaussian_n)              
-        lambert = torch.sigmoid(raw_sh)
+        
+        theta = polar_normals[:, 0]
+        phi = polar_normals[:, 1]
+
+        normals = torch.stack([torch.sin(theta) * torch.cos(phi), torch.sin(theta) * torch.sin(phi), torch.cos(theta)], dim=1)
+
+        nl = normals * to_gaussian_n 
+
+        raw_lambert = torch.sum(nl, dim=1)
+        lambert = torch.sigmoid(raw_lambert)
 
         light_power = 40000 # test value
 
@@ -380,21 +390,27 @@ def splinerender(
     scales *= scaling_modifier
     
     if(mode=="lighted"):
-        #if(debug_iteration%100==1 and writer!=None):
-            #add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
+        if(debug_iteration%100==1 and writer!=None):
+            add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
             #add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
     elif(mode=="no_lighting"):
         ambient_intensity = 1 #lpc
         net_color = pc.get_albedo * ambient_intensity #lpc
-    elif(mode=="normals"):  
-
-        raw_normals = pc.get_sh_normals[:, :3] #lpc
-        norm = torch.norm(raw_normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
-        normalized_normals = raw_normals / norm #lpc
-        net_color = normalized_normals * 0.5 + 0.5 #lpc
     elif(mode=="only_brightness"):
         net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
+    elif(mode=="normals"):
+        polar_normals = pc.get_polar_normals
+        theta = polar_normals[:, 0]
+        phi = polar_normals[:, 1]
+
+        normals = torch.stack([torch.sin(theta) * torch.cos(phi), torch.sin(theta) * torch.sin(phi), torch.cos(theta)], dim=1)
+
+        norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
+        normalized_normals = normals / norm #lpc
+        net_color = normalized_normals * 0.5 + 0.5 #lpc
+
+
 
     rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
 
