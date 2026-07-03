@@ -312,7 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 100, 1_000, 1499,1600,1601,1610,1650,1670,1700,1900,3000, 4_000, 7_000, 11_000, 16_000, 22_000, 30_000, 35_000, 40_000, 50_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000,1499,1600,1601,1610,1650,1670,1700,1900,2_000,4_000,7_000, 30_000, 40_00, 50_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[1_000,7_000,10_000,30_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[1,1_000,7_000,10_000,30_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

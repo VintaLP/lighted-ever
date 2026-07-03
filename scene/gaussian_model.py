@@ -108,7 +108,7 @@ class GaussianModel:
         #self._features_dc = torch.empty(0) old spherical harmonics
         #self._features_rest = torch.empty(0)
         self._albedo = torch.empty(0) #lpc
-        self._sh_normals = torch.empty(0) #lpc    
+        self._polar_normals = torch.empty(0) #lpc    
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
@@ -195,8 +195,8 @@ class GaussianModel:
         return self._albedo #lpc
 
     @property
-    def get_sh_normals(self):
-        return self._sh_normals #lpc
+    def get_polar_normals(self):
+        return self._polar_normals #lpc
 
     def get_densify_gradient(self):
         grads = (self.xyz_gradient_accum / self.denom)
@@ -265,8 +265,22 @@ class GaussianModel:
         
         num_final_points = self._xyz.shape[0] #lpc
         self._albedo = nn.Parameter(fused_color.requires_grad_(True)) #lpc
-        self._sh_normals = nn.Parameter(torch.zeros((num_points, 9), device="cuda", dtype=torch.float32).requires_grad_(True)) #lpc
         
+        #-------- set the polar normals to position vector normalized in polar coordinates -------------------
+        x = fused_point_cloud[:, 0]
+        y = fused_point_cloud[:, 1]
+        z = fused_point_cloud[:, 2]
+
+        r = torch.sqrt(x**2 + y**2 + z**2)
+        r = torch.clamp(r, min=1e-8)
+        theta = torch.acos(z / r)
+        phi = torch.atan2(y, x)
+        polar_normals_init = torch.stack([theta, phi], dim=1)
+        
+        self._polar_normals = nn.Parameter(polar_normals_init.detach().requires_grad_(True))
+        
+        #-----------------------------------------------------------------------------------------------------
+
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.per_point_3d_filter_scale = torch.zeros(
@@ -285,7 +299,7 @@ class GaussianModel:
             #{'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             #{'params': [self._features_rest], 'lr': training_args.feature_rest_lr, "name": "f_rest"},
             {'params': [self._albedo], 'lr': training_args.feature_lr, "name": "albedo"}, #lpc
-            {'params': [self._sh_normals], 'lr': training_args.normal_lr, "name": "sh_normals"}, #lpc
+            {'params': [self._polar_normals], 'lr': training_args.normal_lr, "name": "polar_normals"}, #lpc
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
@@ -310,8 +324,8 @@ class GaussianModel:
         # All channels except the 3 DC
         for i in range(3):  #lpc
             l.append('albedo_{}'.format(i))
-        for i in range(9): #lpc
-            l.append('sh_normal_{}'.format(i))
+        for i in range(2): #lpc
+            l.append('polar_normal_{}'.format(i))
         #for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
         #    l.append('f_dc_{}'.format(i))
         #for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
@@ -329,7 +343,7 @@ class GaussianModel:
         xyz = self._xyz.detach().cpu().numpy()
         normals = np.zeros_like(xyz)
         albedo = self._albedo.detach().cpu().numpy() #lpc
-        sh_normals = self._sh_normals.detach().cpu().numpy() #lpc
+        polar_normals = self._polar_normals.detach().cpu().numpy() #lpc
         # f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         # f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_dc = self._features_dc.detach().flatten(start_dim=1).contiguous().cpu().numpy()
@@ -342,7 +356,7 @@ class GaussianModel:
 
         elements = np.empty((xyz.shape[0]), dtype=dtype_full)
         #attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, axis=1) 
-        attributes = np.concatenate((xyz, normals, albedo, sh_normals, opacities, scale, rotation), axis=1) #lpc
+        attributes = np.concatenate((xyz, normals, albedo, polar_normals, opacities, scale, rotation), axis=1) #lpc
         for i, (attribute, _) in enumerate(dtype_full):
             elements[attribute] = attributes[:, i]
         # elements[:] = list(map(tuple, attributes))
@@ -378,9 +392,9 @@ class GaussianModel:
         albedo[:, 1] = np.asarray(plydata.elements[0]["albedo_1"]) #lpc
         albedo[:, 2] = np.asarray(plydata.elements[0]["albedo_2"]) #lpc
 
-        sh_normals = np.zeros((xyz.shape[0], 9)) #lpc
-        for idx in range(9): 
-            sh_normals[:, idx] = np.asarray(plydata.elements[0]["sh_normal_{}".format(idx)]) #lpc
+        polar_normals = np.zeros((xyz.shape[0], 2)) #lpc
+        for idx in range(2): 
+            polar_normals[:, idx] = np.asarray(plydata.elements[0]["polar_normal_{}".format(idx)]) #lpc
 
         #extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         #extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
@@ -408,7 +422,7 @@ class GaussianModel:
         #self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").contiguous().requires_grad_(True))
 
         self._albedo = nn.Parameter(torch.tensor(albedo, dtype=torch.float, device="cuda").requires_grad_(True)) #lpc
-        self._sh_normals = nn.Parameter(torch.tensor(sh_normals, dtype=torch.float, device="cuda").requires_grad_(True)) #lpc
+        self._polar_normals = nn.Parameter(torch.tensor(polar_normals, dtype=torch.float, device="cuda").requires_grad_(True)) #lpc
         
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
@@ -461,7 +475,7 @@ class GaussianModel:
         #self._features_dc = optimizable_tensors["f_dc"]
         #self._features_rest = optimizable_tensors["f_rest"]
         self._albedo = optimizable_tensors["albedo"]       #lpc
-        self._sh_normals = optimizable_tensors["sh_normals"] #lpc
+        self._polar_normals = optimizable_tensors["polar_normals"] #lpc
         
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
@@ -495,9 +509,9 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_albedo, new_sh_normals, new_opacities, new_scaling, new_rotation):
+    def densification_postfix(self, new_xyz, new_albedo, new_polar_normals, new_opacities, new_scaling, new_rotation):
         
-        if torch.isnan(new_sh_normals).any() or torch.isinf(new_sh_normals).any():
+        if torch.isnan(new_polar_normals).any() or torch.isinf(new_polar_normals).any():
             ic("ACHTUNG: Ungültige Werte in neuen SH-Normals erkannt!")
         
         
@@ -505,7 +519,7 @@ class GaussianModel:
         #"f_dc": new_features_dc,
         #"f_rest": new_features_rest,
         "albedo": new_albedo, #lpc
-        "sh_normals": new_sh_normals, #lpc
+        "polar_normals": new_polar_normals, #lpc
         "opacity": new_opacities,
         "scaling" : new_scaling,
         "rotation" : new_rotation}
@@ -515,7 +529,7 @@ class GaussianModel:
         #self._features_dc = optimizable_tensors["f_dc"]
         #self._features_rest = optimizable_tensors["f_rest"]
         self._albedo = optimizable_tensors["albedo"] #lpc
-        self._sh_normals = optimizable_tensors["sh_normals"] #lpc  
+        self._polar_normals = optimizable_tensors["polar_normals"] #lpc  
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
@@ -552,7 +566,7 @@ class GaussianModel:
         #new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         #new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_albedo = self._albedo[selected_pts_mask].repeat(N, 1)
-        new_sh_normals = self._sh_normals[selected_pts_mask].repeat(N, 1)
+        new_polar_normals = self._polar_normals[selected_pts_mask].repeat(N, 1)
 
 
         # halve opacity given new scaling
@@ -561,7 +575,7 @@ class GaussianModel:
         minor_opacity = (1 - (-density * minor_axis).exp()).clip(min=0)
         new_opacity = self.inverse_opacity_activation(minor_opacity / 2).repeat(N,1)
 
-        self.densification_postfix(new_xyz, new_albedo, new_sh_normals, new_opacity, new_scaling, new_rotation) #lpc
+        self.densification_postfix(new_xyz, new_albedo, new_polar_normals, new_opacity, new_scaling, new_rotation) #lpc
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -581,9 +595,9 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
 
         new_albedo = self._albedo[selected_pts_mask] #lpc
-        new_sh_normals = self._sh_normals[selected_pts_mask] #lpc
+        new_polar_normals = self._polar_normals[selected_pts_mask] #lpc
 
-        self.densification_postfix(new_xyz, new_albedo, new_sh_normals, new_opacity, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_albedo, new_polar_normals, new_opacity, new_scaling, new_rotation)
         print(
             f"Cloned {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()}. Max gradient: {grads.max()}"
         )
