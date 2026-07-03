@@ -296,7 +296,7 @@ def add_normal_frame_to_tensorboard(pc, iteration, writer):
     writer.add_image('Normalen_Visualisierung', img_chw, iteration)
     plt.close(fig)
 
-def compute_comoving_light_color(pc, view, light_offsets, writer=None):
+def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False):
     """
     Berechnet das Co-Moving Light mit gelernten Normalen (Ohne Wasser-Effekte).
     
@@ -345,8 +345,11 @@ def compute_comoving_light_color(pc, view, light_offsets, writer=None):
 
         contrib = (light_power * inv_sq * lambert).unsqueeze(-1)          # [N, 1]
         total_irradiance += contrib
-        
-    net_color = (albedo / math.pi) * total_irradiance    
+    if only_brightness:
+        net_color = total_irradiance
+    else:
+        net_color = albedo * total_irradiance
+        #net_color = (albedo / math.pi) * total_irradiance    
     return net_color
 
 def splinerender(
@@ -388,6 +391,8 @@ def splinerender(
         norm = torch.norm(raw_normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
         normalized_normals = raw_normals / norm #lpc
         net_color = normalized_normals * 0.5 + 0.5 #lpc
+    elif(mode=="only_brightness"):
+        net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
 
     rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
 

@@ -101,7 +101,7 @@ class PipelineParams(ParamGroup):
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 50_000
+        self.iterations = 30_000
 
         self.betas = [0.9, 0.999]
 

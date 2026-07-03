@@ -100,9 +100,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     st = time.time()   
                     light_offset = scene.light_offset
                     custom_cam.colmap_id = 2 if switch_camera else 1 
+                    mode = ""
+                    if do_training:
+                        mode=("no_lighting" if show_unlit else "lighted")
+                    else:
+                        mode="only_brightness"    
 
-
-                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0, mode=("no_lighting" if show_unlit else "lighted"))["render"]
+                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0, mode=mode)["render"]
 
                     # net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
                     print(f"{1/(time.time()-st)}", end='\r')
@@ -147,7 +151,7 @@ if __name__ == "__main__":
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     # training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.save_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.mode)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.save_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
 
