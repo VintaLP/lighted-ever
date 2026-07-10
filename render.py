@@ -67,7 +67,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, checkpoint, opt,mode="lighted"):
     with torch.no_grad():
         #gaussians = GaussianModel(dataset.sh_degree, dataset.use_neural_network, dataset.max_opacity, dataset.tmin)
-        gaussians = GaussianModel(sh_degree=dataset.sh_degree, max_opacity=dataset.max_opacity, tmin=dataset.tmin)
+        gaussians = GaussianModel(sh_degree=dataset.sh_degree, max_opacity=dataset.max_opacity, tmin=dataset.tmin, light_strength=dataset.light_strength)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
         light_tensor = torch.tensor(scene.light_offset, dtype=torch.float32, device="cuda") #lpc

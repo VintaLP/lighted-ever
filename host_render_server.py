@@ -52,11 +52,11 @@ except ImportError:
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
-    gaussians = GaussianModel(dataset.sh_degree)
+    gaussians = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
     scene = Scene(dataset, gaussians, shuffle=True)
     gaussians.training_setup(opt)
     
-    if checkpoint:
+    if checkpoint and not checkpoint.endswith("None"):
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
     else:
@@ -105,8 +105,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         mode=("no_lighting" if show_unlit else "lighted")
                     else:
                         mode=("only_brightness" if show_unlit else "normals")
+                    gaussians.light_strength =  int(scaling_modifer * 100000) 
 
-                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0, mode=mode)["render"]
+                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset, random=False,debug_iteration=30000, tmin=0, mode=mode)["render"]
 
                     # net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
                     print(f"{1/(time.time()-st)}", end='\r')
