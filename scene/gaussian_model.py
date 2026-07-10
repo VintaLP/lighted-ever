@@ -100,7 +100,7 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-    def __init__(self, sh_degree : int, max_opacity=0.99, tmin=0.2):
+    def __init__(self, sh_degree : int, max_opacity=0.99, tmin=0.2, light_strength=0):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree          
         assert sh_degree <= 3, "Check slang implementation, does currently support max sh degree 3"
@@ -120,6 +120,7 @@ class GaussianModel:
         self.spatial_lr_scale = 0
         self.setup_functions(max_opacity)
         self.tmin = tmin
+        self.light_strength = light_strength
 
     def capture(self):
         return (
@@ -183,7 +184,9 @@ class GaussianModel:
     @property
     def get_xyz(self):
         return self._xyz
-    
+    @property
+    def get_light_strength(self):
+        return self.light_strength
     @property
     def get_features(self):
         features_dc = self.feature_activation(self._features_dc)
@@ -193,7 +196,7 @@ class GaussianModel:
     @property
     def get_albedo(self):
         return self._albedo #lpc
-
+    
     @property
     def get_polar_normals(self):
         return self._polar_normals #lpc

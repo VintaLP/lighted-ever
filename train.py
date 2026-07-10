@@ -57,7 +57,7 @@ except ImportError:
 def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelineParams, testing_iterations : List[int], saving_iterations : List[int], checkpoint_iterations : List[int], checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
+    gaussians = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
     scene = Scene(dataset, gaussians, shuffle=True)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -135,8 +135,10 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
             pipe.debug = True
 
         light_offset = scene.light_offset #lpc
-
-        render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer)
+        if iteration < 1:
+            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer, mode="no_lighting")
+        else:
+            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer)   
         image, densification_metric, visibility_filter, radii = render_pkg["render"], render_pkg["densification_metric"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.gt_alpha_mask is not None:
@@ -154,10 +156,15 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
 
         fast_loss = size_loss + (1-gaussians.get_opacity).mean()
         
+        #ellipsoids close to center loss
+        dist_to_origin = gaussians.get_xyz.norm(dim=-1)
+        sparsity_penalty = torch.relu(dist_to_origin - 5.0) 
+        sparsity_loss = (sparsity_penalty ** 2).mean()
+
         distortion_loss = render_pkg['distortion_loss'].mean()# if iteration > 2000 else 0
         loss = (1.0 - lambda_dssim) * Ll1 + lambda_dssim * (
             1.0 - ssim(image, gt_image)
-        ).clip(min=0, max=1) + opt.lambda_distortion * distortion_loss + opt.lambda_anisotropic * anisotropic_loss 
+        ).clip(min=0, max=1) + opt.lambda_distortion * distortion_loss + opt.lambda_anisotropic * anisotropic_loss +opt.lambda_sparsity * sparsity_loss
                 
         if torch.isnan(loss).any():
             print("nan")
@@ -178,7 +185,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, pipe, scene, renderFunc=splinerender, renderArgs=[light_offset])
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, pipe, scene, dataset,renderFunc=splinerender, renderArgs=[light_offset])
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -256,12 +263,14 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, pipe : PipelineParams, scene : Scene, renderFunc, renderArgs = []):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, pipe : PipelineParams, scene : Scene, dataset : ModelParams, renderFunc, renderArgs = [], ):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
-        
+        if(iteration==1):
+           tb_writer.add_text('Info/Source_Path', dataset.source_path)
+           tb_writer.add_text('Info/Light_Strength', str(dataset.light_strength))
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
@@ -278,11 +287,13 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 for idx, viewpoint in enumerate(config['cameras']):
                     light_offset = renderArgs[0] if len(renderArgs) > 0 else torch.zeros(3) #lpc
                     render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer) #lpc
+                    not_lighted = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer, mode="no_lighting")
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0) #lpc
-                    
+                    nl_image = torch.clamp(not_lighted["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/no_light_render".format(viewpoint.image_name), nl_image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
