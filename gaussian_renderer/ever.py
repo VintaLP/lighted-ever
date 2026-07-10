@@ -312,6 +312,7 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
     gxyz       = pc.get_xyz    
     albedo     = pc.get_albedo
     light_offset = light_offsets[view.colmap_id-1][1:]
+    light_strength = pc.get_light_strength
     device = gxyz.device
 
     c2w  = torch.linalg.inv(view.world_view_transform.T.cuda())
@@ -341,7 +342,6 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
         to_gaussian_n = to_gaussian / dist.unsqueeze(-1)
 
         inv_sq = 1.0 / (4 * np.pi * dist.pow(2)) # Inverse-Square-Law
-        #inv_sq = 1.0
         
         theta = polar_normals[:, 0]
         phi = polar_normals[:, 1]
@@ -351,11 +351,10 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
         nl = normals * to_gaussian_n 
 
         raw_lambert = torch.sum(nl, dim=1)
-        lambert = torch.sigmoid(raw_lambert)
+        #lambert = torch.sigmoid(raw_lambert)
+        lambert = torch.clamp(raw_lambert, min=0)
 
-        light_power = 40000 # test value
-
-        contrib = (light_power * inv_sq * lambert).unsqueeze(-1)          # [N, 1]
+        contrib = (light_strength* inv_sq * lambert).unsqueeze(-1)          # [N, 1]
         total_irradiance += contrib
     if only_brightness:
         net_color = total_irradiance

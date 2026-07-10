@@ -83,6 +83,7 @@ class ModelParams(ParamGroup):
         self.enable_mip_splatting = False  # Add the missing attribute
         self.low_pass_2d_kernel_size = 3 # Add the missing attribute
         self.low_pass_3d_kernel_size = 3 # Add the missing attribute
+        self.light_strength = 40_000
 
         super().__init__(parser, "Loading Parameters", sentinel)
 
@@ -127,7 +128,10 @@ class OptimizationParams(ParamGroup):
 
         self.lambda_anisotropic = 1e-1
         self.lambda_distortion = 0
+        self.lambda_sparsity = 0.1
+
         self.sh_up_interval = 2000
+
 
         self.densification_interval = 200
         self.opacity_reset_interval = 300000
