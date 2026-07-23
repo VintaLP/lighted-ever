@@ -292,12 +292,15 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     light_offset = renderArgs[0] if len(renderArgs) > 0 else torch.zeros(3) #lpc
                     render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer) #lpc
                     not_lighted = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer, mode="no_lighting")
+                    only_brightness = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer, mode="only_brightness")
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0) #lpc
                     nl_image = torch.clamp(not_lighted["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    ob_image = torch.clamp(only_brightness["render"], 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + "_view_{}/no_light_render".format(viewpoint.image_name), nl_image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/only_brightness_render".format(viewpoint.image_name), ob_image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
