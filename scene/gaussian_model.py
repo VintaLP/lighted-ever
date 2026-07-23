@@ -613,9 +613,20 @@ class GaussianModel:
 
     @torch.no_grad
     def densify_and_prune(self, max_grad, extent):
+
+
         prune_mask = (self.get_opacity < 0.005).reshape(-1)        
         print(f"Pruned {prune_mask.sum()} primitives. Mean Prune Opacity: {self.get_opacity[prune_mask].mean()}")
-        self.prune_points(prune_mask)        
+
+        prune_mask_2 = (self.get_xyz.norm(dim=1) > 2).reshape(-1)
+        pruned_norms = self.get_xyz[prune_mask_2].norm(dim=1)
+        mean_norm = pruned_norms.mean() if pruned_norms.numel() > 0 else 0.0
+        print(f"Pruned {prune_mask_2.sum()} primitives, because of distance to 0,0,0 . Mean Prune Distance: {mean_norm}")
+        
+        combined_prune_mask = prune_mask_2 | prune_mask
+        
+        self.prune_points(combined_prune_mask)        
+        
 
         grads = self.get_densify_gradient()
         if self.get_xyz.shape[0] < MAX_PRIMITIVES:
