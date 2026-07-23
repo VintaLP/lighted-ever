@@ -13,7 +13,7 @@ import time
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, ssim, normal_consistency_loss
 from gaussian_renderer import network_gui
 from gaussian_renderer.ever import splinerender
 import sys
@@ -161,10 +161,14 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
         sparsity_penalty = torch.relu(dist_to_origin - 5.0) 
         sparsity_loss = (sparsity_penalty ** 2).mean()
 
+        #normal consistency loss
+        nc_loss = normal_consistency_loss(gaussians.get_xyz,gaussians.get_polar_normals, 30)
+
+
         distortion_loss = render_pkg['distortion_loss'].mean()# if iteration > 2000 else 0
         loss = (1.0 - lambda_dssim) * Ll1 + lambda_dssim * (
             1.0 - ssim(image, gt_image)
-        ).clip(min=0, max=1) + opt.lambda_distortion * distortion_loss + opt.lambda_anisotropic * anisotropic_loss +opt.lambda_sparsity * sparsity_loss
+        ).clip(min=0, max=1) + opt.lambda_distortion * distortion_loss + opt.lambda_anisotropic * anisotropic_loss # + opt.lambda_normal_consistency * nc_loss
                 
         if torch.isnan(loss).any():
             print("nan")

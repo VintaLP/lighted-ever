@@ -62,3 +62,58 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
+def normal_consistency_loss(xyz, polar_normals,k=8, max_samples=1000):
+    """
+    xyz: gaussian positions
+    polar_normals: polar normals of gaussians
+    k: nearest neighbour count
+
+    punishes dissimilar normals close to each other
+    """
+
+    N = xyz.shape[0]
+
+    if N <= k:
+        return torch.tensor(0.0, device=xyz.device)
+    
+    if N<=max_samples:
+        sampled_xyz = xyz
+        sampled_normals = polar_normals
+    else:
+        indices = torch.randperm(N, device=xyz.device)[:max_samples]
+        sampled_xyz = xyz[indices]
+        sampled_normals = polar_normals[indices]
+    
+    theta = sampled_normals[:, 0]
+    phi = sampled_normals[:, 1]
+
+    #turns normal to cartesian coordinates
+    nx = torch.sin(theta) * torch.cos(phi)
+    ny = torch.sin(theta) * torch.sin(phi)
+    nz = torch.cos(theta)
+
+    normals = torch.stack([nx, ny, nz], dim=1)
+
+    #calculate distance between gaussians
+    dist_matrix = torch.cdist(sampled_xyz, xyz)
+
+    #calculate k-nearest neighbors
+    _, indices = torch.topk(dist_matrix, k=k+1, dim=1, largest=False)
+    neighbors_idx = indices[:, 1:]
+
+    #get normals of nearest neighbors
+    neighbor_theta = polar_normals[neighbors_idx, 0]
+    neighbor_phi = polar_normals[neighbors_idx, 1]
+
+    neighbor_normals_x = torch.sin(neighbor_theta) * torch.cos(neighbor_phi)
+    neighbor_normals_y = torch.sin(neighbor_theta) * torch.sin(neighbor_phi)
+    neighbor_normals_z = torch.cos(neighbor_theta)
+
+    neighbor_normals = torch.stack([neighbor_normals_x, neighbor_normals_y, neighbor_normals_z], dim=2)
+
+    #calculate cosinus simularity between normals
+    central_normals_expanded = normals.unsqueeze(1).expand(-1, k, -1) 
+    cos_sim = torch.sum(central_normals_expanded * neighbor_normals, dim=2)
+
+    loss = (1.0 - cos_sim).mean()
+    return loss

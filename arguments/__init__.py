@@ -129,6 +129,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_anisotropic = 1e-1
         self.lambda_distortion = 0
         self.lambda_sparsity = 0.1
+        self.lambda_normal_consistency = 0.01
 
         self.sh_up_interval = 2000
 
