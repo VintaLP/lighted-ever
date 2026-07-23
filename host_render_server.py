@@ -105,10 +105,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         mode=("no_lighting" if show_unlit else "lighted")
                     else:
                         mode=("only_brightness" if show_unlit else "normals")
+                    
                     gaussians.light_strength =  int(scaling_modifer * 100000) 
 
-                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset, random=False,debug_iteration=30000, tmin=0, mode=mode)["render"]
 
+                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset, random=False,debug_iteration=30000, tmin=0, mode=mode, ambient_intensity=scaling_modifer)["render"]
                     # net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
                     print(f"{1/(time.time()-st)}", end='\r')
                     net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()

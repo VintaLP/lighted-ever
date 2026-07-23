@@ -374,7 +374,8 @@ def splinerender(
     tmax=1e7,
     mode="lighted", #lpc
     debug_iteration=0,
-    writer=None
+    writer=None,
+    ambient_intensity=1
 ):
     device = pc.get_xyz.device
     if view.model == ProjectionType.PERSPECTIVE:
@@ -394,7 +395,6 @@ def splinerender(
             #add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
     elif(mode=="no_lighting"):
-        ambient_intensity = 1 #lpc
         net_color = pc.get_albedo * ambient_intensity #lpc
     elif(mode=="only_brightness"):
         net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
