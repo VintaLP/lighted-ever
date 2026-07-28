@@ -313,6 +313,7 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
     albedo     = pc.get_albedo
     light_offset = light_offsets[view.colmap_id-1][1:]
     light_strength = pc.get_light_strength
+    opacity = pc.get_opacity
     device = gxyz.device
 
     c2w  = torch.linalg.inv(view.world_view_transform.T.cuda())
@@ -352,8 +353,9 @@ def compute_comoving_light_color(pc, view, light_offsets, only_brightness=False)
 
         raw_lambert = torch.sum(nl, dim=1)
         #lambert = torch.sigmoid(raw_lambert)
-        lambert = torch.clamp(raw_lambert, min=0)
-
+        lambert = torch.abs(raw_lambert)
+        #scale for low opacity
+        #lambert = pre_lambert * opacity +  (1.0 - opacity)
         contrib = (light_strength* inv_sq * lambert).unsqueeze(-1)          # [N, 1]
         total_irradiance += contrib
     if only_brightness:
@@ -388,14 +390,16 @@ def splinerender(
     
     scales, density = pc.get_scale_and_density_for_rendering()    
     scales *= scaling_modifier
-    
+
+    net_color = compute_comoving_light_color(pc, view, light_tensor)
+
     if(mode=="lighted"):
         if(debug_iteration%100==1 and writer!=None):
             add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
             #add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
     elif(mode=="no_lighting"):
-        net_color = pc.get_albedo * ambient_intensity #lpc
+        net_color = pc.get_albedo * ambient_intensity * 0.05 #lpc
     elif(mode=="only_brightness"):
         net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
     elif(mode=="normals"):
@@ -407,11 +411,11 @@ def splinerender(
 
         norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
         normalized_normals = normals / norm #lpc
-        net_color = normalized_normals * 0.5 + 0.5 #lpc
+        net_color = torch.abs(normalized_normals) #lpc
 
 
-
-    rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
+    #rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
+    rendered_features = net_color.reshape(-1, 1, 3) #lpc
 
     tmin = pc.tmin if tmin is None else tmin
     out, extras = trace_rays(

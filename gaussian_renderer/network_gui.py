@@ -89,6 +89,6 @@ def receive():
             print("")
             traceback.print_exc()
             raise e
-        return custom_cam, do_training, do_shs_python, do_rot_scale_python, keep_alive, scaling_modifier
+        return custom_cam, do_training, do_shs_python, do_rot_scale_python, keep_alive, scaling_modifier, light_strength, ambient_light, light_switch, normals, only_brightness, normal_cloud
     else:
         return None, None, None, None, None, None
