@@ -84,7 +84,23 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
     first_iter += 1
 
     densify_grad_threshold = opt.densify_grad_threshold
-    
+
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    initial_ply_path = os.path.join(current_script_dir, "normal_visualize_point_cloud.ply")
+        
+    if os.path.exists(initial_ply_path):
+        temp_g = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
+        temp_g.load_ply(initial_ply_path)
+        initial_model_state = {
+            "xyz": temp_g._xyz.detach().clone(),
+            "albedo": temp_g._albedo.detach().clone(),
+            "polar_normals": temp_g._polar_normals.detach().clone(),
+            "scaling": temp_g._scaling.detach().clone(),
+            "rotation": temp_g._rotation.detach().clone(),
+            "opacity": temp_g._opacity.detach().clone()
+        }
+        del temp_g
+    saved_current_state = None
 
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
@@ -94,11 +110,53 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                 net_image_bytes = None
                 # custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 
-                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer = network_gui.receive()
+                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer, light_strength, ambient_light, light_switch, normals, only_brightness, normal_cloud = network_gui.receive()
                 if custom_cam != None:
                     viewpoint_cam = train_cameras[0]
                     # custom_cam.model = viewpoint_cam.model
                     # custom_cam.distortion_params = viewpoint_cam.distortion_params
+                    if normal_cloud:
+                        if saved_current_state is None: 
+                            saved_current_state = {
+                                "xyz": gaussians._xyz.detach().clone(),
+                                "albedo": gaussians._albedo.detach().clone(),
+                                "polar_normals": gaussians._polar_normals.detach().clone(),
+                                "scaling": gaussians._scaling.detach().clone(),
+                                "rotation": gaussians._rotation.detach().clone(),
+                                "opacity": gaussians._opacity.detach().clone()
+                            }
+                        if initial_model_state is not None:
+                            with torch.no_grad():
+                                gaussians._xyz = initial_model_state["xyz"].clone()
+                                gaussians._albedo = initial_model_state["albedo"].clone()
+                                gaussians._polar_normals = initial_model_state["polar_normals"].clone()
+                                gaussians._scaling = initial_model_state["scaling"].clone()
+                                gaussians._rotation = initial_model_state["rotation"].clone()
+                                gaussians._opacity = initial_model_state["opacity"].clone()
+                    else:
+                        if saved_current_state is not None:
+                            with torch.no_grad():
+                                gaussians._xyz = saved_current_state["xyz"].clone()
+                                gaussians._albedo = saved_current_state["albedo"].clone()
+                                gaussians._polar_normals = saved_current_state["polar_normals"].clone()
+                                gaussians._scaling = saved_current_state["scaling"].clone()
+                                gaussians._rotation = saved_current_state["rotation"].clone()
+                                gaussians._opacity = saved_current_state["opacity"].clone()
+                            saved_current_state = None
+                    
+                    mode = ""
+
+                    if normals:
+                        mode = "normals"
+                    elif only_brightness:
+                        mode = "only_brightness"
+                    else:
+                        mode=("no_lighting" if light_switch else "lighted")
+
+                    
+                    gaussians.light_strength =  int(light_strength)
+
+
                     custom_cam.model=ProjectionType.PERSPECTIVE
                     image_width = custom_cam.image_width
                     image_height = custom_cam.image_height
@@ -106,7 +164,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
                     custom_cam.colmap_id = 2 if switch_camera else 1 
                     light_offset = scene.light_offset
-                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer, mode=("no_lighting" if show_unlit else "lighted"))["render"]                    
+                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer, mode=mode, ambient_intensity=ambient_light)["render"]                    
                     net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     net_image_bytes = memoryview(net_image)
@@ -328,7 +386,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 100, 1_000, 1499,1600,1601,1610,1650,1670,1700,1900,3000, 4_000, 7_000, 11_000, 16_000, 22_000, 30_000, 35_000, 40_000, 50_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000,1499,1600,1601,1610,1650,1670,1700,1900,2_000,4_000,7_000, 30_000, 40_00, 50_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 1_000,1499,1600,1601,1610,1650,1670,1700,1900,2_000,4_000,7_000, 30_000, 40_00, 50_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[1,1_000,7_000,10_000,30_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)

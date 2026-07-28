@@ -72,6 +72,13 @@ def receive():
             do_rot_scale_python = bool(message["rot_scale_python"])
             keep_alive = bool(message["keep_alive"])
             scaling_modifier = message["scaling_modifier"]
+            light_strength = message["light_strength"]
+            ambient_light = message["ambient_light"]
+            light_switch = message["light_switch"]
+            normals = message["normals"]
+            only_brightness = message["only_brightness"]
+            normal_cloud = message["normal_cloud"]            
+
             world_view_transform = torch.reshape(torch.tensor(message["view_matrix"]), (4, 4)).cuda()
             world_view_transform[:,1] = -world_view_transform[:,1]
             world_view_transform[:,2] = -world_view_transform[:,2]

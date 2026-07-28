@@ -290,6 +290,62 @@ class GaussianModel:
             [scales.shape[0], 1], dtype=torch.float32, device='cuda'
         )
 
+    def create_from_fibonacci_sphere(self, num_points: int = 5000, radius: float = 2.0, spatial_lr_scale: float = 1.0):
+        self.spatial_lr_scale = spatial_lr_scale
+        device = torch.device("cuda")
+        
+        # 1. Fibonacci-Sphäre direkt mit PyTorch-Tensoren generieren
+        indices = torch.arange(0, num_points, dtype=torch.float32, device=device) + 0.5
+        phi = torch.acos(1 - 2 * indices / num_points)
+        golden_ratio = (1 + 5**0.5) / 2
+        theta = 2 * np.pi * indices / golden_ratio
+
+        x = radius * torch.cos(theta) * torch.sin(phi)
+        y = radius * torch.sin(theta) * torch.sin(phi)
+        z = radius * torch.cos(phi)
+
+        fused_point_cloud = torch.stack([x, y, z], dim=-1)
+
+        print(f"Fibonacci-Sphäre initialisiert mit {num_points} Punkten und Radius {radius}.")
+
+        # 2. Skalierungen & Rotationen
+        scales = torch.ones((num_points, 3), device=device) * (radius * 0.05)
+        raw_scales = self.scaling_inverse_activation(scales)
+        
+        rots = torch.zeros((num_points, 4), device=device)
+        rots[:, 0] = 1.0  # Einheitscaternion [1, 0, 0, 0]
+
+        # 3. Albedo (Einheitsfarbe)
+        fused_color = torch.ones((num_points, 3), dtype=torch.float32, device=device) * 0.5
+
+        # 4. Opazität
+        opacities = inverse_sigmoid(0.5 * torch.ones((num_points, 1), dtype=torch.float32, device=device))
+
+        # 5. Polar-Normalen exakt vom Zentrum weg berechnen (jetzt rein mit PyTorch-Tensoren)
+        r = torch.sqrt(x**2 + y**2 + z**2)
+        r = torch.clamp(r, min=1e-8)
+        
+        polar_theta = torch.acos(z / r)
+        polar_phi = torch.atan2(y, x)
+        
+        polar_normals_init = torch.stack([polar_theta, polar_phi], dim=-1)
+
+        # 6. Parameter als PyTorch Parameters registrieren
+        self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
+        
+        features = torch.zeros((num_points, 3, (self.max_sh_degree + 1) ** 2), device=device)
+        self._features_dc = nn.Parameter(features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True))
+        
+        self._scaling = nn.Parameter(raw_scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._albedo = nn.Parameter(fused_color.requires_grad_(True))
+        self._polar_normals = nn.Parameter(polar_normals_init.detach().requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        
+        self.max_radii2D = torch.zeros((num_points), device=device)
+        self.per_point_3d_filter_scale = torch.zeros([num_points, 1], dtype=torch.float32, device=device)
+
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
 

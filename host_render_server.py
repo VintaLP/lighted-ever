@@ -79,6 +79,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     torch.cuda.empty_cache()
     st = time.time()
 
+    initial_model_state = None
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    initial_ply_path = os.path.join(current_script_dir, "normal_visualize_point_cloud.ply")
+    
+    if os.path.exists(initial_ply_path):
+        temp_g = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
+        temp_g.load_ply(initial_ply_path)
+        initial_model_state = {
+            "xyz": temp_g._xyz.detach().clone(),
+            "albedo": temp_g._albedo.detach().clone(),
+            "polar_normals": temp_g._polar_normals.detach().clone(),
+            "scaling": temp_g._scaling.detach().clone(),
+            "rotation": temp_g._rotation.detach().clone(),
+            "opacity": temp_g._opacity.detach().clone()
+        }
+        del temp_g
+    
+    saved_current_state = None
     while True:
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -86,8 +104,38 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             try:
                 net_image_bytes = None
                 # custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer = network_gui.receive()
-                if custom_cam != None:                    
+                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer, light_strength, ambient_light, light_switch, normals, only_brightness, normal_cloud = network_gui.receive()
+                if custom_cam != None:    
+
+                    if normal_cloud:
+                        if saved_current_state is None:
+                            saved_current_state = {
+                                "xyz": gaussians._xyz.detach().clone(),
+                                "albedo": gaussians._albedo.detach().clone(),
+                                "polar_normals": gaussians._polar_normals.detach().clone(),
+                                "scaling": gaussians._scaling.detach().clone(),
+                                "rotation": gaussians._rotation.detach().clone(),
+                                "opacity": gaussians._opacity.detach().clone()
+                            }
+                        if initial_model_state is not None:
+                            with torch.no_grad():
+                                gaussians._xyz = initial_model_state["xyz"].clone()
+                                gaussians._albedo = initial_model_state["albedo"].clone()
+                                gaussians._polar_normals = initial_model_state["polar_normals"].clone()
+                                gaussians._scaling = initial_model_state["scaling"].clone()
+                                gaussians._rotation = initial_model_state["rotation"].clone()
+                                gaussians._opacity = initial_model_state["opacity"].clone()
+                    else:
+                        if saved_current_state is not None:
+                            with torch.no_grad():
+                                gaussians._xyz = saved_current_state["xyz"].clone()
+                                gaussians._albedo = saved_current_state["albedo"].clone()
+                                gaussians._polar_normals = saved_current_state["polar_normals"].clone()
+                                gaussians._scaling = saved_current_state["scaling"].clone()
+                                gaussians._rotation = saved_current_state["rotation"].clone()
+                                gaussians._opacity = saved_current_state["opacity"].clone()
+                            saved_current_state = None
+                                          
                     # custom_cam.model = viewpoint_cam.model
                     # custom_cam.distortion_params = viewpoint_cam.distortion_params
                     # custom_cam.model=ProjectionType.FISHEYE
