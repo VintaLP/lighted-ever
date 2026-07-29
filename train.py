@@ -30,6 +30,7 @@ import numpy as np
 from typing import List
 from torch.optim.lr_scheduler import ExponentialLR, LinearLR, ChainedScheduler
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 from scene.dataset_readers import ProjectionType
 
@@ -324,7 +325,69 @@ def prepare_output_and_logger(args):
     else:
         print("Tensorboard not available: not logging progress")
     return tb_writer
+def visualize_cameras(cameras):
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection="3d")
 
+    centers = []
+
+    for cam  in cameras:
+        R = np.asarray(cam.R)
+        T = np.asarray(cam.T)
+
+        # world position
+        #C = -R.T @ T
+        C = cam.camera_center
+        centers.append(C)
+
+        # viewing direction
+        w2c = cam.world_view_transform.cpu().numpy().T
+        c2w = np.linalg.inv(w2c)
+
+        forward = c2w[:3, 2]
+
+
+        ax.scatter(*C, color="red", s=20)
+
+        ax.quiver(
+            C[0], C[1], C[2],
+            forward[0], forward[1], forward[2],
+            length=0.2,
+            normalize=True,
+            color="blue"
+        )
+
+    centers = np.stack(centers)
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+
+    # Equal aspect ratio
+    mins = centers.min(axis=0)
+    maxs = centers.max(axis=0)
+    center = (mins + maxs) / 2
+    radius = (maxs - mins).max() / 2
+
+    ax.set_xlim(center[0] - radius, center[0] + radius)
+    ax.set_ylim(center[1] - radius, center[1] + radius)
+    ax.set_zlim(center[2] - radius, center[2] + radius)
+
+    positions = np.array([cam.camera_center for cam in cameras])
+    center = positions.mean(axis=0)
+    #sphere_center = center.detach().cpu().numpy()
+    fig.tight_layout()
+
+    return fig
+
+def figure_to_numpy(fig):
+    fig.canvas.draw()
+
+    image = np.asarray(fig.canvas.buffer_rgba())[..., :3]
+
+    plt.close(fig)
+
+    return image
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, pipe : PipelineParams, scene : Scene, dataset : ModelParams, renderFunc, renderArgs = [], ):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
@@ -333,6 +396,17 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         if(iteration==1):
            tb_writer.add_text('Info/Source_Path', dataset.source_path)
            tb_writer.add_text('Info/Light_Strength', str(dataset.light_strength))
+    if iteration == 2:
+        cameras = scene.getTrainCameras()
+        fig = visualize_cameras(cameras)
+        image = figure_to_numpy(fig)
+
+        tb_writer.add_image(
+            "camera_setup",
+            image,
+            global_step=iteration,
+            dataformats="HWC"
+        )       
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()

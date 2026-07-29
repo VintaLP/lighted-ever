@@ -83,7 +83,7 @@ class ModelParams(ParamGroup):
         self.enable_mip_splatting = False  # Add the missing attribute
         self.low_pass_2d_kernel_size = 3 # Add the missing attribute
         self.low_pass_3d_kernel_size = 3 # Add the missing attribute
-        self.light_strength = 200
+        self.light_strength = 5000
 
         super().__init__(parser, "Loading Parameters", sentinel)
 

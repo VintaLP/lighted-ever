@@ -391,7 +391,8 @@ def splinerender(
     scales, density = pc.get_scale_and_density_for_rendering()    
     scales *= scaling_modifier
 
-    net_color = compute_comoving_light_color(pc, view, light_tensor)
+    #net_color = compute_comoving_light_color(pc, view, light_tensor)
+    net_color = 0
 
     if(mode=="lighted"):
         if(debug_iteration%100==1 and writer!=None):
@@ -412,10 +413,10 @@ def splinerender(
         norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
         normalized_normals = normals / norm #lpc
         net_color = torch.abs(normalized_normals) #lpc
-
-
-    #rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
-    rendered_features = net_color.reshape(-1, 1, 3) #lpc
+    #print("net_color: ", net_color.min().item(), net_color.max().item()) 
+    rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
+    #rendered_features = net_color.reshape(-1, 1, 3) #lpc
+    #print("rendered_features: ", rendered_features.min().item(), rendered_features.max().item()) 
 
     tmin = pc.tmin if tmin is None else tmin
     out, extras = trace_rays(
@@ -433,16 +434,16 @@ def splinerender(
         max_iters=MAX_ITERS
     )
 
+  
     torch.cuda.synchronize()
     radii = torch.ones_like(densification_metric[..., 0])
-
+    
     rendered_image = out[:, :3].T.reshape(3, view.image_height, view.image_width)
     num_pixels = (extras['touch_count'] // 2)
 
     # aspect_ratio = scales.max(dim=-1).values / scales.min(dim=-1).values
     side_length = (num_pixels).float().sqrt() #/ aspect_ratio # mul by 2 to get to rect, then sqrt
     radii = side_length / 2 * np.sqrt(2) * 2.5 * 5
-
     return {
         "render": rendered_image,
         "densification_metric": densification_metric,
