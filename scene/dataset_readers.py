@@ -23,14 +23,18 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 import enum
-import json
 
 class ProjectionType(enum.Enum):
-  """Camera projection type (perspective pinhole, fisheye, or 360 pano)."""
+    PERSPECTIVE = 'perspective'
+    FISHEYE = 'fisheye'
+    PANORAMIC = 'pano'
 
-  PERSPECTIVE = 'perspective'
-  FISHEYE = 'fisheye'
-  PANORAMIC = 'pano'
+class LightInfo(NamedTuple):
+    light_type: str
+    shape: str
+    rel_pos: np.array
+    rel_norm: np.array
+    size: float
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -52,7 +56,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
-    light_offset: np.array = np.array([1, 0.0, 0.0, 0.0]) #lpc
+    light: Optional[LightInfo] = None
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -77,19 +81,6 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def convert_to_float(frac_str):
-    try:
-        return float(frac_str)
-    except ValueError:
-        num, denom = frac_str.split('/')
-        try:
-            leading, num = num.split(' ')
-            whole = float(leading)
-        except ValueError:
-            whole = 0
-        frac = float(num) / float(denom)
-        return whole - frac if whole < 0 else whole + frac
-
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_path):
     if os.path.isfile(metadata_path):
         with open(metadata_path, "r") as f:
@@ -99,15 +90,12 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
         metadata = None
     cam_infos = []
 
-
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
-        # the exact output you're looking for:
         sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
         sys.stdout.flush()
 
         extr = cam_extrinsics[key]
-
         intr = cam_intrinsics[extr.camera_id]
         height = intr.height
         width = intr.width
@@ -131,18 +119,15 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
             distortion_params = None
             fx, fy, cx, cy = intr.params[:4]
             k1, k2, k3, k4 = intr.params[4:]
-            distortion_params = {}
-            distortion_params['k1'] = k1
-            distortion_params['k2'] = k2
-            distortion_params['k3'] = k3
-            distortion_params['k4'] = k4
+            distortion_params = {'k1': k1, 'k2': k2, 'k3': k3, 'k4': k4}
             model = ProjectionType.FISHEYE
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
         else:
-            assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
+            assert False, "Colmap camera model not handled!"
+
         camera_folder = "cam_" + str(extr.camera_id)
         camera_image_path = os.path.join(images_folder, camera_folder)
         image_path = os.path.join(camera_image_path, os.path.basename(extr.name))
@@ -153,8 +138,9 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width,
                               height=height, model=model,
-                              distortion_params=distortion_params)
+                              distortion_params=distortion_params) 
         cam_infos.append(cam_info)
+
     sys.stdout.write('\n')
     return cam_infos
 
@@ -167,21 +153,17 @@ def fetchPly(path):
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
 def storePly(path, xyz, rgb):
-    # Define the dtype for the structured array
     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
-    
     normals = np.zeros_like(xyz)
-
     elements = np.empty(xyz.shape[0], dtype=dtype)
     attributes = np.concatenate((xyz, normals, rgb), axis=1)
     elements[:] = list(map(tuple, attributes))
-
-    # Create the PlyData object and write to file
     vertex_element = PlyElement.describe(elements, 'vertex')
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
+
 def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
@@ -194,11 +176,42 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
         cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
+    light_file_path = os.path.join(path, "light_data.txt")
+    light_info = None
+    
+    if os.path.exists(light_file_path):
+        try:
+            with open(light_file_path, "r") as fid:                
+                _ = fid.readline() 
+                data_line = fid.readline()
+                if data_line:
+                    elems = [e.strip() for e in data_line.split(",")]
+                    l_type = elems[0]
+                    l_shape = elems[1]
+                    l_pos = np.array([float(elems[2]), float(elems[3]), float(elems[4])])
+                    l_norm = np.array([float(elems[5]), float(elems[6]), float(elems[7])])
+                    l_size = float(elems[8])
+                    
+                    light_info = LightInfo(
+                        light_type=l_type,
+                        shape=l_shape,
+                        rel_pos=l_pos,
+                        rel_norm=l_norm,
+                        size=l_size
+                    )
+            print(f"[Ever Loader] Loaded light info: {light_info.light_type} ({light_info.shape})")
+        except Exception as e:
+            print(f"[Ever Loader] Error loading light data: {e}")
+    else:
+        print(f"[Ever Loader] light_data.txt not found at {light_file_path}.")
+
     reading_dir = "images_4" if images == None else images
+    
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
         images_folder=os.path.join(path, reading_dir),
         metadata_path=os.path.join(path, "metadata.json"))
+    
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:
@@ -214,7 +227,6 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
     if not os.path.exists(ply_path):
-        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
         try:
             xyz, rgb, _ = read_points3D_binary(bin_path)
         except:
@@ -225,98 +237,43 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     except:
         pcd = None
 
-    light_offset = [] # lpc
-    light_file_path = os.path.join(path, "light_positions.txt") #lpc
-    
-    #----- lpc --------------------------------
-    if rig:
-        if os.path.exists(light_file_path):
-            try:
-                with open(light_file_path, "r") as fid:                
-                    _ = fid.readline() #skip header
-                    try:
-                        while True:
-                            data_line = fid.readline()
-                            if data_line:
-                                elems = data_line.strip().split(",")
-                                if len(elems) == 4:
-                                    light_offset.append(np.array([int(elems[0]), float(elems[1]), float(elems[2]), float(elems[3])]))
-                                    print(f"\n[Ever Loader] Loaded Light Offset: {light_offset}")
-                            else:
-                                break        
-                    except StopIteration:
-                        print("Read all relative light positions")                 
-            except Exception as e:
-                print(f"\n[Ever Loader] Error while loading Light Offset {e}. Use [1,0,0,0].")
-        else:
-            print(f"\n[Ever Loader] light_position.txt not found. Use [1,0,0,0].")
-    else:
-        if os.path.exists(light_file_path):
-            try:
-                with open(light_file_path, "r") as fid:                
-                    _ = fid.readline() #skip header
-                    data_line = fid.readline()
-                    if data_line:
-                        elems = data_line.strip().split(",")
-                        if len(elems) == 3:
-                            light_offset = np.array([float(elems[0]), float(elems[1]), float(elems[2])])
-                            print(f"\n[Ever Loader] Loaded Light Offset: {light_offset}")                
-            except Exception as e:
-                print(f"\n[Ever Loader] Error while loading Light Offset {e}. Use [0,0,0].")
-        else:
-            print(f"\n[Ever Loader] light_position.txt not found. Use [0,0,0].")         
-    #--------------------------------------------
-
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
                            ply_path=ply_path,
-                           light_offset=light_offset)
+                           light=light_info)
     return scene_info
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
     cam_infos = []
-
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
         fovx = contents["camera_angle_x"]
-
         frames = contents["frames"]
         for idx, frame in enumerate(frames):
             cam_name = os.path.join(path, frame["file_path"] + extension)
-
-            # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
-            # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
             c2w[:3, 1:3] *= -1
-
-            # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
-            R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+            R = np.transpose(w2c[:3,:3])
             T = w2c[:3, 3]
 
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
             image = Image.open(image_path)
-
             im_data = np.array(image.convert("RGBA"))
-
             bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
-
             norm_data = im_data / 255.0
             arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
             image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
 
             fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
-            FovY = fovy 
-            FovX = fovx
-
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+            
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=fovy, FovX=fovx, image=image,
                             image_path=image_path, image_name=image_name, width=image.size[0], 
                             height=image.size[1], model=ProjectionType.PERSPECTIVE,
                             distortion_params=None))
-            
     return cam_infos
 
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
@@ -333,15 +290,10 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
 
     ply_path = os.path.join(path, "points3d.ply")
     if not os.path.exists(ply_path):
-        # Since this data set has no colmap data, we start with random points
         num_pts = 1
-        print(f"Generating random point cloud ({num_pts})...")
-        
-        # We create random points inside the bounds of the synthetic Blender scenes
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
         pcd = fetchPly(ply_path)

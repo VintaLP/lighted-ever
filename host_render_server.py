@@ -146,7 +146,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
 
                     st = time.time()   
-                    light_offset = scene.light_offset
+                    light = scene.light
                     custom_cam.colmap_id = 2 if switch_camera else 1 
                     mode = ""
                     if normals:
@@ -161,7 +161,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
 
-                    net_image = splinerender(custom_cam, gaussians, pipe, light_offset,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0, mode=mode, ambient_intensity=ambient_light)["render"]
+                    net_image = splinerender(custom_cam, gaussians, pipe, light,scaling_modifier=scaling_modifer, random=False,debug_iteration=30000, tmin=0, mode=mode, ambient_intensity=ambient_light)["render"]
                     # net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
                     print(f"{1/(time.time()-st)}", end='\r')
                     net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()

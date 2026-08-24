@@ -113,7 +113,7 @@ class OptimizationParams(ParamGroup):
 
         self.feature_lr = 0.0025
         self.feature_rest_lr = 0.00025
-        self.normal_lr = 0.001
+        self.normal_lr = 0.01
         self.bg_lr = 0.0
         self.opacity_lr = 0.0125
         self.scaling_lr = 0.005
