@@ -103,6 +103,8 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
         del temp_g
     saved_current_state = None
 
+    #compute_all_light_positions(scene.getTrainCameras(),scene.light_offset)
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -113,6 +115,10 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                 
                 custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer, light_strength, ambient_light, light_switch, normals, only_brightness, normal_cloud = network_gui.receive()
                 if custom_cam != None:
+                    if not hasattr(custom_cam, 'R'):
+                        custom_cam.R = custom_cam.world_view_transform[:3, :3].detach().cpu().numpy()
+                    if not hasattr(custom_cam, 'T'):    
+                        custom_cam.T = custom_cam.world_view_transform[3, :3].detach().cpu().numpy()
                     viewpoint_cam = train_cameras[0]
                     # custom_cam.model = viewpoint_cam.model
                     # custom_cam.distortion_params = viewpoint_cam.distortion_params
@@ -164,8 +170,11 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     custom_cam.image_width = image_width // PREVIEW_RES_FACTOR
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
                     custom_cam.colmap_id = 2 if switch_camera else 1 
-                    light_offset = scene.light_offset
-                    net_image = splinerender(custom_cam, gaussians, pipe,light_offset,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer, mode=mode, ambient_intensity=ambient_light)["render"]                    
+
+                    
+
+                    light = scene.light
+                    net_image = splinerender(custom_cam, gaussians, pipe,light,scaling_modifier=scaling_modifer,random=False, tmin=0, debug_iteration=iteration, writer=tb_writer, mode=mode, ambient_intensity=ambient_light)["render"]                    
                     net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     net_image_bytes = memoryview(net_image)
@@ -193,11 +202,11 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
         if (iteration - 1) == debug_from:
             pipe.debug = True
 
-        light_offset = scene.light_offset #lpc
+        light = scene.light #lpc
         if iteration < 1:
-            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer, mode="no_lighting")
+            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer, mode="no_lighting")
         else:
-            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light_offset, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer)   
+            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer)   
         image, densification_metric, visibility_filter, radii = render_pkg["render"], render_pkg["densification_metric"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.gt_alpha_mask is not None:
@@ -248,7 +257,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, pipe, scene, dataset,renderFunc=splinerender, renderArgs=[light_offset])
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, pipe, scene, dataset,renderFunc=splinerender, renderArgs=[light])
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -418,35 +427,67 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
 
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
-                l1_test = 0.0
-                psnr_test = 0.0
+                lighted_l1_test = 0.0
+                lighted_psnr_test = 0.0
+                unlit_l1_test = 0.0
+                unlit_psnr_test = 0.0
+                normals_l1_test = 0.0
+                normals_psnr_test = 0.0                
                 for idx, viewpoint in enumerate(config['cameras']):
-                    light_offset = renderArgs[0] if len(renderArgs) > 0 else torch.zeros(3) #lpc
-                    render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer) #lpc
-                    not_lighted = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer, mode="no_lighting")
-                    only_brightness = renderFunc(viewpoint, scene.gaussians, pipe, light_offset, random=False, writer=tb_writer, mode="only_brightness")
+                    light = renderArgs[0] if len(renderArgs) > 0 else None
+                    render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer)
+                    not_lighted = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="no_lighting")
+                    only_brightness = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="only_brightness")
+                    normals = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="normals")
+                    
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0) #lpc
                     nl_image = torch.clamp(not_lighted["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    n_image = torch.clamp(normals["render"], 0.0, 1.0)
+                    gt_lighted_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    gt_unlit_image = torch.clamp(viewpoint.original_unlit.to("cuda"), 0.0, 1.0)
+                    gt_normal_image = torch.clamp(viewpoint.original_normals.to("cuda"), 0.0, 1.0)
                     ob_image = torch.clamp(only_brightness["render"], 0.0, 1.0)
+
+                    #if iteration > 10_000:
+                        #debug = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="debug")
                     if tb_writer and (idx < 5):
-                        tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
-                        tb_writer.add_images(config['name'] + "_view_{}/no_light_render".format(viewpoint.image_name), nl_image[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + "_view_{}/only_brightness_render".format(viewpoint.image_name), ob_image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/lighted_render".format(viewpoint.image_name), image[None], global_step=iteration)     
+                        
+                        tb_writer.add_images(config['name'] + "_view_{}/normal_render".format(viewpoint.image_name), n_image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/unlit_render".format(viewpoint.image_name), nl_image[None], global_step=iteration)
+                        
                         if iteration == testing_iterations[0]:
-                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
-                    l1_test += l1_loss(image, gt_image).mean().double()
-                    psnr_test += psnr(image, gt_image).mean().double()
-                psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
+                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth_lighted".format(viewpoint.image_name), gt_lighted_image[None], global_step=iteration)
+                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth_unlit".format(viewpoint.image_name), gt_unlit_image[None], global_step=iteration)
+                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth_normal".format(viewpoint.image_name), gt_normal_image[None], global_step=iteration)
+                    lighted_l1_test += l1_loss(image, gt_lighted_image).mean().double()
+                    lighted_psnr_test += psnr(image, gt_lighted_image).mean().double()
+                    unlit_l1_test += l1_loss(nl_image, gt_unlit_image).mean().double()
+                    unlit_psnr_test += psnr(nl_image, gt_unlit_image).mean().double()
+                    normals_l1_test += l1_loss(n_image, gt_normal_image).mean().double()
+                    normals_psnr_test += psnr(n_image, gt_normal_image).mean().double()
+
+                lighted_psnr_test /= len(config['cameras'])
+                lighted_l1_test /= len(config['cameras']) 
+                unlit_psnr_test /= len(config['cameras'])
+                unlit_l1_test /= len(config['cameras']) 
+                normals_psnr_test /= len(config['cameras'])
+                normals_l1_test /= len(config['cameras'])          
+                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], lighted_l1_test, lighted_psnr_test))
                 if tb_writer:
-                    tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
-                    tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/l1_loss - lighted', lighted_l1_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/l1_loss - unlit', unlit_l1_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/l1_loss - normals', normals_l1_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/psnr - lighted', lighted_psnr_test, iteration)               
+                    tb_writer.add_scalar(config['name'] + '/psnr - unlit', unlit_psnr_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/psnr - normals', normals_psnr_test, iteration)
+
 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
+            tb_writer.add_scalar('mean_albedo', torch.mean(scene.gaussians.get_albedo), iteration)
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":

@@ -44,6 +44,8 @@ class CameraInfo(NamedTuple):
     FovX: np.array
     image: np.array
     image_path: str
+    normal_image_path :str
+    unlit_image_path :str
     image_name: str
     width: int
     height: int
@@ -81,7 +83,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_path):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
     if os.path.isfile(metadata_path):
         with open(metadata_path, "r") as f:
             print("Loading metadata")
@@ -89,6 +91,10 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
     else:
         metadata = None
     cam_infos = []
+
+    images_folder = os.path.join(base_dir, "images")
+    normals_folder = os.path.join(base_dir, "normals")
+    unlit_folder = os.path.join(base_dir, "unlit")
 
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -129,14 +135,26 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_pa
             assert False, "Colmap camera model not handled!"
 
         camera_folder = "cam_" + str(extr.camera_id)
+
         camera_image_path = os.path.join(images_folder, camera_folder)
         image_path = os.path.join(camera_image_path, os.path.basename(extr.name))
+
+        camera_normals_path = os.path.join(normals_folder, camera_folder)
+        normals_path = os.path.join(camera_normals_path, os.path.basename(extr.name))
+
+        camera_unlit_path = os.path.join(unlit_folder, camera_folder)
+        unlit_path = os.path.join(camera_unlit_path, os.path.basename(extr.name))
+
         image_name = os.path.basename(image_path).split(".")[0]
+
         image_path = image_path.replace(" ", "_")
+        normals_path = normals_path.replace(" ", "_")
+        unlit_path = unlit_path.replace(" ", "_")
+        
         image = None
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width,
+                              image_path=image_path, normal_image_path=normals_path,unlit_image_path=unlit_path, image_name=image_name, width=width,
                               height=height, model=model,
                               distortion_params=distortion_params) 
         cam_infos.append(cam_info)
@@ -209,7 +227,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
-        images_folder=os.path.join(path, reading_dir),
+        base_dir=path,#images_folder=os.path.join(path, reading_dir),
         metadata_path=os.path.join(path, "metadata.json"))
     
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)

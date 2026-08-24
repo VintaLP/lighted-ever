@@ -8,7 +8,7 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-
+import os
 from scene.cameras import Camera
 import numpy as np
 from utils.general_utils import PILtoTorch
@@ -48,10 +48,21 @@ def loadCam(args, id, cam_info, resolution_scale):
     if resized_image_rgb.shape[0] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
 
+    normals_image = None
+    if hasattr(cam_info, 'normal_image_path') and cam_info.normal_image_path and os.path.exists(cam_info.normal_image_path):
+        norm_pil = Image.open(cam_info.normal_image_path).convert("RGB")
+        normals_image = PILtoTorch(norm_pil, resolution)[:3, ...]
+
+    unlit_image = None
+    if hasattr(cam_info, 'unlit_image_path') and cam_info.unlit_image_path and os.path.exists(cam_info.unlit_image_path):
+        unlit_pil = Image.open(cam_info.unlit_image_path).convert("RGB")
+        unlit_image = PILtoTorch(unlit_pil, resolution)[:3, ...]    
+
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
                   image=gt_image, gt_alpha_mask=loaded_mask,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device,
+                  normals_image=normals_image, unlit_image=unlit_image,
                   model=cam_info.model, distortion_params=cam_info.distortion_params)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
