@@ -70,7 +70,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians = GaussianModel(sh_degree=dataset.sh_degree, max_opacity=dataset.max_opacity, tmin=dataset.tmin, light_strength=dataset.light_strength)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
-        light_tensor = torch.tensor(scene.light_offset, dtype=torch.float32, device="cuda") #lpc
+        light = scene.light #lpc
 
         if checkpoint:
             (model_params, first_iter) = torch.load(checkpoint)
@@ -81,10 +81,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         
         folder_suffix = datetime.now().strftime("%Y%m%d_%H%M%S") #fynn
         if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, folder_suffix,light_tensor, mode)
+             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, folder_suffix,light, mode)
 
         if not skip_test:
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, folder_suffix, light_tensor, mode)
+             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, folder_suffix, light, mode)
 
 if __name__ == "__main__":
     # Set up command line argument parser
