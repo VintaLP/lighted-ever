@@ -87,7 +87,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
     densify_grad_threshold = opt.densify_grad_threshold
 
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    initial_ply_path = os.path.join(current_script_dir, "normal_visualize_point_cloud.ply")
+    initial_ply_path = "HALLO" # os.path.join(current_script_dir, "normal_visualize_point_cloud.ply") TEMPORARY
         
     if os.path.exists(initial_ply_path):
         temp_g = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
@@ -95,7 +95,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
         initial_model_state = {
             "xyz": temp_g._xyz.detach().clone(),
             "albedo": temp_g._albedo.detach().clone(),
-            "polar_normals": temp_g._polar_normals.detach().clone(),
+            "normals": temp_g._normals.detach().clone(),
             "scaling": temp_g._scaling.detach().clone(),
             "rotation": temp_g._rotation.detach().clone(),
             "opacity": temp_g._opacity.detach().clone()
@@ -127,7 +127,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                             saved_current_state = {
                                 "xyz": gaussians._xyz.detach().clone(),
                                 "albedo": gaussians._albedo.detach().clone(),
-                                "polar_normals": gaussians._polar_normals.detach().clone(),
+                                "normals": gaussians._normals.detach().clone(),
                                 "scaling": gaussians._scaling.detach().clone(),
                                 "rotation": gaussians._rotation.detach().clone(),
                                 "opacity": gaussians._opacity.detach().clone()
@@ -136,7 +136,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                             with torch.no_grad():
                                 gaussians._xyz = initial_model_state["xyz"].clone()
                                 gaussians._albedo = initial_model_state["albedo"].clone()
-                                gaussians._polar_normals = initial_model_state["polar_normals"].clone()
+                                gaussians._normals = initial_model_state["normals"].clone()
                                 gaussians._scaling = initial_model_state["scaling"].clone()
                                 gaussians._rotation = initial_model_state["rotation"].clone()
                                 gaussians._opacity = initial_model_state["opacity"].clone()
@@ -145,7 +145,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                             with torch.no_grad():
                                 gaussians._xyz = saved_current_state["xyz"].clone()
                                 gaussians._albedo = saved_current_state["albedo"].clone()
-                                gaussians._polar_normals = saved_current_state["polar_normals"].clone()
+                                gaussians._normals = saved_current_state["normals"].clone()
                                 gaussians._scaling = saved_current_state["scaling"].clone()
                                 gaussians._rotation = saved_current_state["rotation"].clone()
                                 gaussians._opacity = saved_current_state["opacity"].clone()
@@ -230,7 +230,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
         sparsity_loss = (sparsity_penalty ** 2).mean()
 
         #normal consistency loss
-        nc_loss = normal_consistency_loss(gaussians.get_xyz,gaussians.get_polar_normals, 30)
+        nc_loss = normal_consistency_loss(gaussians.get_xyz,gaussians.get_normals, 30)
 
 
         distortion_loss = render_pkg['distortion_loss'].mean()# if iteration > 2000 else 0
@@ -432,7 +432,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 unlit_l1_test = 0.0
                 unlit_psnr_test = 0.0
                 normals_l1_test = 0.0
-                normals_psnr_test = 0.0                
+                normals_psnr_test = 0.0  
+                brightness_l1_test = 0.0
+                brightness_psnr_test = 0.0             
                 for idx, viewpoint in enumerate(config['cameras']):
                     light = renderArgs[0] if len(renderArgs) > 0 else None
                     render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer)
@@ -443,10 +445,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0) #lpc
                     nl_image = torch.clamp(not_lighted["render"], 0.0, 1.0)
                     n_image = torch.clamp(normals["render"], 0.0, 1.0)
+                    ob_image = torch.clamp(only_brightness["render"], 0.0, 1.0)
+
                     gt_lighted_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     gt_unlit_image = torch.clamp(viewpoint.original_unlit.to("cuda"), 0.0, 1.0)
                     gt_normal_image = torch.clamp(viewpoint.original_normals.to("cuda"), 0.0, 1.0)
-                    ob_image = torch.clamp(only_brightness["render"], 0.0, 1.0)
+                    gt_brightness_image = torch.clamp(viewpoint.original_brightness.to("cuda"), 0.0, 1.0)
 
                     #if iteration > 10_000:
                         #debug = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="debug")
@@ -461,27 +465,36 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth_lighted".format(viewpoint.image_name), gt_lighted_image[None], global_step=iteration)
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth_unlit".format(viewpoint.image_name), gt_unlit_image[None], global_step=iteration)
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth_normal".format(viewpoint.image_name), gt_normal_image[None], global_step=iteration)
+                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth_brightness".format(viewpoint.image_name), gt_brightness_image[None], global_step=iteration)
+
                     lighted_l1_test += l1_loss(image, gt_lighted_image).mean().double()
                     lighted_psnr_test += psnr(image, gt_lighted_image).mean().double()
                     unlit_l1_test += l1_loss(nl_image, gt_unlit_image).mean().double()
                     unlit_psnr_test += psnr(nl_image, gt_unlit_image).mean().double()
                     normals_l1_test += l1_loss(n_image, gt_normal_image).mean().double()
                     normals_psnr_test += psnr(n_image, gt_normal_image).mean().double()
+                    brightness_l1_test += l1_loss(ob_image, gt_brightness_image).mean().double()
+                    brightness_psnr_test += psnr(ob_image, gt_brightness_image).mean().double()
+
 
                 lighted_psnr_test /= len(config['cameras'])
                 lighted_l1_test /= len(config['cameras']) 
                 unlit_psnr_test /= len(config['cameras'])
                 unlit_l1_test /= len(config['cameras']) 
                 normals_psnr_test /= len(config['cameras'])
-                normals_l1_test /= len(config['cameras'])          
+                normals_l1_test /= len(config['cameras'])    
+                brightness_psnr_test /= len(config['cameras'])      
+                brightness_l1_test /= len(config['cameras'])
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], lighted_l1_test, lighted_psnr_test))
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/l1_loss - lighted', lighted_l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/l1_loss - unlit', unlit_l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/l1_loss - normals', normals_l1_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/l1_loss - brightness', brightness_l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/psnr - lighted', lighted_psnr_test, iteration)               
                     tb_writer.add_scalar(config['name'] + '/psnr - unlit', unlit_psnr_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/psnr - normals', normals_psnr_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/psnr - brightness', brightness_psnr_test, iteration)
 
 
         if tb_writer:
@@ -500,10 +513,10 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 100, 1_000, 1499,1600,1601,1610,1650,1670,1700,1900,3000, 4_000, 7_000, 11_000, 16_000, 22_000, 30_000, 35_000, 40_000, 50_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 1_000,1499,1600,1601,1610,1650,1670,1700,1900,2_000,4_000,7_000, 30_000, 40_00, 50_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 1_000, 2000 ,3000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000, 12_000, 13_000, 14_000 ,15_000, 16_000, 17_000, 18_000, 19_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000,50_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 1_000, 2000 ,3000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000, 12_000, 13_000, 14_000 ,15_000, 16_000, 17_000, 18_000, 19_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000,50_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[1,1_000,7_000,10_000,30_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[1,1_000,7_000,10_000,20_000,30_000,40_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

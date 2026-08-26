@@ -62,10 +62,10 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
-def normal_consistency_loss(xyz, polar_normals,k=8, max_samples=1000):
+def normal_consistency_loss(xyz, xyz_normals,k=8, max_samples=1000):
     """
     xyz: gaussian positions
-    polar_normals: polar normals of gaussians
+    xyz_normal: xyz normals of gaussians
     k: nearest neighbour count
 
     punishes dissimilar normals close to each other
@@ -78,19 +78,16 @@ def normal_consistency_loss(xyz, polar_normals,k=8, max_samples=1000):
     
     if N<=max_samples:
         sampled_xyz = xyz
-        sampled_normals = polar_normals
+        sampled_normals = xyz_normals
     else:
         indices = torch.randperm(N, device=xyz.device)[:max_samples]
         sampled_xyz = xyz[indices]
-        sampled_normals = polar_normals[indices]
-    
-    theta = sampled_normals[:, 0]
-    phi = sampled_normals[:, 1]
+        sampled_normals = xyz_normals[indices]
 
-    #turns normal to cartesian coordinates
-    nx = torch.sin(theta) * torch.cos(phi)
-    ny = torch.sin(theta) * torch.sin(phi)
-    nz = torch.cos(theta)
+
+    nx = sampled_normals[:, 0]
+    ny = sampled_normals[:, 1]
+    nz = sampled_normals[:, 2]
 
     normals = torch.stack([nx, ny, nz], dim=1)
 
@@ -102,8 +99,8 @@ def normal_consistency_loss(xyz, polar_normals,k=8, max_samples=1000):
     neighbors_idx = indices[:, 1:]
 
     #get normals of nearest neighbors
-    neighbor_theta = polar_normals[neighbors_idx, 0]
-    neighbor_phi = polar_normals[neighbors_idx, 1]
+    neighbor_theta = xyz_normals[neighbors_idx, 0]
+    neighbor_phi = xyz_normals[neighbors_idx, 1]
 
     neighbor_normals_x = torch.sin(neighbor_theta) * torch.cos(neighbor_phi)
     neighbor_normals_y = torch.sin(neighbor_theta) * torch.sin(neighbor_phi)

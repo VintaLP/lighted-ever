@@ -46,6 +46,7 @@ class CameraInfo(NamedTuple):
     image_path: str
     normal_image_path :str
     unlit_image_path :str
+    brightness_image_path :str
     image_name: str
     width: int
     height: int
@@ -95,6 +96,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
     images_folder = os.path.join(base_dir, "images")
     normals_folder = os.path.join(base_dir, "normals")
     unlit_folder = os.path.join(base_dir, "unlit")
+    brightness_folder = os.path.join(base_dir, "brightness")
 
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -145,6 +147,9 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
         camera_unlit_path = os.path.join(unlit_folder, camera_folder)
         unlit_path = os.path.join(camera_unlit_path, os.path.basename(extr.name))
 
+        camera_brightness_path = os.path.join(brightness_folder, camera_folder)
+        brightness_path = os.path.join(camera_brightness_path, os.path.basename(extr.name))
+        
         image_name = os.path.basename(image_path).split(".")[0]
 
         image_path = image_path.replace(" ", "_")
@@ -154,7 +159,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
         image = None
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, normal_image_path=normals_path,unlit_image_path=unlit_path, image_name=image_name, width=width,
+                              image_path=image_path, normal_image_path=normals_path,unlit_image_path=unlit_path, brightness_image_path=brightness_path,image_name=image_name, width=width,
                               height=height, model=model,
                               distortion_params=distortion_params) 
         cam_infos.append(cam_info)

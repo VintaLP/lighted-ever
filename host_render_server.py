@@ -81,15 +81,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     initial_model_state = None
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    initial_ply_path = os.path.join(current_script_dir, "normal_visualize_point_cloud.ply")
-    
+    #initial_ply_path = os.path.join(current_script_dir, "normal_visualize_point_cloud.ply")
+    initial_ply_path = os.path.join(os.path.join(dataset.model_path,
+                                                       "point_cloud",
+                                                       "iteration_1",
+                                                       "point_cloud.ply"))
     if os.path.exists(initial_ply_path):
         temp_g = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
         temp_g.load_ply(initial_ply_path)
         initial_model_state = {
             "xyz": temp_g._xyz.detach().clone(),
             "albedo": temp_g._albedo.detach().clone(),
-            "polar_normals": temp_g._polar_normals.detach().clone(),
+            "normals": temp_g._normals.detach().clone(),
             "scaling": temp_g._scaling.detach().clone(),
             "rotation": temp_g._rotation.detach().clone(),
             "opacity": temp_g._opacity.detach().clone()
@@ -112,7 +115,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             saved_current_state = {
                                 "xyz": gaussians._xyz.detach().clone(),
                                 "albedo": gaussians._albedo.detach().clone(),
-                                "polar_normals": gaussians._polar_normals.detach().clone(),
+                                "normals": gaussians._normals.detach().clone(),
                                 "scaling": gaussians._scaling.detach().clone(),
                                 "rotation": gaussians._rotation.detach().clone(),
                                 "opacity": gaussians._opacity.detach().clone()
@@ -121,7 +124,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             with torch.no_grad():
                                 gaussians._xyz = initial_model_state["xyz"].clone()
                                 gaussians._albedo = initial_model_state["albedo"].clone()
-                                gaussians._polar_normals = initial_model_state["polar_normals"].clone()
+                                gaussians._normals = initial_model_state["normals"].clone()
                                 gaussians._scaling = initial_model_state["scaling"].clone()
                                 gaussians._rotation = initial_model_state["rotation"].clone()
                                 gaussians._opacity = initial_model_state["opacity"].clone()
@@ -130,7 +133,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             with torch.no_grad():
                                 gaussians._xyz = saved_current_state["xyz"].clone()
                                 gaussians._albedo = saved_current_state["albedo"].clone()
-                                gaussians._polar_normals = saved_current_state["polar_normals"].clone()
+                                gaussians._normals = saved_current_state["normals"].clone()
                                 gaussians._scaling = saved_current_state["scaling"].clone()
                                 gaussians._rotation = saved_current_state["rotation"].clone()
                                 gaussians._opacity = saved_current_state["opacity"].clone()

@@ -257,14 +257,10 @@ def add_normal_frame_to_video(pc, iteration):
 
 
 def add_normal_frame_to_tensorboard(pc, iteration, writer):
-    polar_normals = pc.get_polar_normals.detach()
+    normals = pc.get_normals.detach()
     points = pc.get_xyz.detach()
     
-    theta = polar_normals[:, 0]
-    phi = polar_normals[:, 1]
 
-    normals = torch.stack([torch.sin(theta) * torch.cos(phi), torch.sin(theta) * torch.sin(phi), torch.cos(theta)], dim=1)
-    
     
     norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
     n = (normals / norm).cpu().numpy()
@@ -300,7 +296,7 @@ def add_normal_frame_to_tensorboard(pc, iteration, writer):
     writer.add_image('Normalen_Visualisierung', img_chw, iteration)
     plt.close(fig)
 
-def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, point_normals_to_origin=True):
+def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, point_normals_to_origin=False):
     gxyz = pc.get_xyz    
     albedo = pc.get_albedo
     device = gxyz.device
@@ -308,69 +304,48 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
     if rel_light is None:
         return albedo if not only_brightness else torch.zeros_like(gxyz)
     
-    if hasattr(view, 'camera_center') and view.camera_center is not None:
-        if isinstance(view.camera_center, torch.Tensor):
-            cam_world_pos = view.camera_center.to(dtype=torch.float32, device=device)
-        else:
-            cam_world_pos = torch.tensor(view.camera_center, dtype=torch.float32, device=device)
-    elif hasattr(view, 'world_view_transform') and view.world_view_transform is not None:
-        cam_world_pos = view.world_view_transform.inverse()[3, :3].to(dtype=torch.float32, device=device)
+    if hasattr(view, 'world_view_transform') and view.world_view_transform is not None:
+        c2w_matrix = view.world_view_transform.inverse().to(dtype=torch.float32, device=device)
     else:
-        cam_world_pos = torch.zeros(3, dtype=torch.float32, device=device)
-
-    if hasattr(view, 'R') and view.R is not None:
-        if isinstance(view.R, torch.Tensor):
-            cam_rot = view.R.to(dtype=torch.float32, device=device)
-        else:
-            cam_rot = torch.tensor(view.R, dtype=torch.float32, device=device)
-    elif hasattr(view, 'world_view_transform') and view.world_view_transform is not None:
-        w2c_rot = view.world_view_transform[:3, :3].to(dtype=torch.float32, device=device)
-        cam_rot = w2c_rot.transpose(0, 1)
-    else:
-        cam_rot = torch.eye(3, dtype=torch.float32, device=device)
+        c2w_matrix = torch.eye(4, dtype=torch.float32, device=device)
+        if hasattr(view, 'camera_center') and view.camera_center is not None:
+            c2w_matrix[3, :3] = torch.tensor(view.camera_center, dtype=torch.float32, device=device)
 
     rel_pos = torch.tensor(rel_light.rel_pos, dtype=torch.float32, device=device)
     flip_matrix = torch.tensor([1.0, -1.0, -1.0], device=device)
     rel_pos_opencv = rel_pos * flip_matrix
 
-    world_light_pos = cam_world_pos + torch.matmul(cam_rot, rel_pos_opencv)
+    rel_pos_homo = torch.cat([rel_pos_opencv, torch.tensor([1.0], device=device)])
+    world_light_pos = (rel_pos_homo @ c2w_matrix)[:3]
 
     if point_normals_to_origin:
-        # normal is pointing to center (0,0,0)
-        normals = torch.nn.functional.normalize(-gxyz, p=2, dim=1)
+        raw_normals = torch.nn.functional.normalize(gxyz, p=2, dim=1)
+        normalized_normals = torch.nn.functional.normalize(raw_normals, p=2, dim=-1)
     else:
-        #calculate normal from polar coordinates
-        polar_normals = pc.get_polar_normals
-        theta = polar_normals[:, 0]
-        phi = polar_normals[:, 1]
-        normals = torch.stack([
-            torch.sin(theta) * torch.cos(phi), 
-            torch.sin(theta) * torch.sin(phi), 
-            torch.cos(theta)
-        ], dim=1)
-
+        raw_normals = pc.get_normals
+        normalized_normals = torch.nn.functional.normalize(raw_normals, p=2, dim=-1)
     light_strength = pc.get_light_strength
 
-    to_gaussian   = - gxyz  - world_light_pos.unsqueeze(0)                    
-    dist          = to_gaussian.norm(dim=-1).clamp(min=1e-8)         
-    to_gaussian_n = to_gaussian / dist.unsqueeze(-1)
+    to_light = world_light_pos.unsqueeze(0) - gxyz                     
+    dist = to_light.norm(dim=-1, keepdim=True).clamp(min=1e-8)         
+    to_light_n = to_light / dist
 
     inv_sq = 1.0 / (4 * math.pi * dist.pow(2)) 
 
-    nl = normals * to_gaussian_n
-    raw_lambert = torch.sum(nl, dim=1)
+    raw_lambert = torch.sum(normalized_normals * to_light_n, dim=-1, keepdim=True)
     lambert = torch.clamp(raw_lambert, min=0)
 
     #clamp albedos since i can make solutions with negative albedos
     clamped_albedo = torch.clamp(albedo, 0)
 
     #expand the brightness on all color channels
-    total_irradiance = (light_strength * inv_sq * lambert).unsqueeze(-1).expand_as(gxyz)
+    total_irradiance = (light_strength * inv_sq * lambert).expand_as(gxyz)
     
     if only_brightness:
         net_color = total_irradiance
     else:
-        net_color = clamped_albedo * total_irradiance    
+        brdf_diffuse = 1.0 / math.pi
+        net_color = clamped_albedo * brdf_diffuse * total_irradiance    
 
     return net_color
 
@@ -413,10 +388,7 @@ def splinerender(
     elif(mode=="only_brightness"):
         net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
     elif(mode=="normals"):
-        polar_normals = pc.get_polar_normals
-        theta = polar_normals[:, 0]
-        phi = polar_normals[:, 1]
-        normals = torch.stack([torch.sin(theta) * torch.cos(phi), torch.sin(theta) * torch.sin(phi), torch.cos(theta)], dim=1)
+        normals = pc.get_normals
         norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
         normalized_normals = normals / norm #lpc
         net_color = (normalized_normals + 1.0) * 0.5 #lpc
