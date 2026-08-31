@@ -318,35 +318,96 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
     rel_pos_homo = torch.cat([rel_pos_opencv, torch.tensor([1.0], device=device)])
     world_light_pos = (rel_pos_homo @ c2w_matrix)[:3]
 
+    #transform light_normal for area light ------------
+    if hasattr(rel_light, 'rel_norm'):
+        rel_norm = torch.tensor(rel_light.rel_norm, dtype=torch.float32, device=device)
+        rel_norm_opencv = rel_norm * flip_matrix
+        rel_norm_homo = torch.cat([rel_norm_opencv, torch.tensor([0.0], device=device)])
+        world_light_norm = torch.nn.functional.normalize((rel_norm_homo @ c2w_matrix)[:3], dim=0)
+    else:
+        world_light_norm = torch.tensor([0.0, -1.0, 0.0], device=device)
+    #--------------------------------------------------------
     if point_normals_to_origin:
         raw_normals = torch.nn.functional.normalize(gxyz, p=2, dim=1)
         normalized_normals = torch.nn.functional.normalize(raw_normals, p=2, dim=-1)
     else:
         raw_normals = pc.get_normals
         normalized_normals = torch.nn.functional.normalize(raw_normals, p=2, dim=-1)
+
     light_strength = pc.get_light_strength
-
+    calibration_factor = 1
+    light_strength = light_strength * calibration_factor
     to_light = world_light_pos.unsqueeze(0) - gxyz                     
-    dist = to_light.norm(dim=-1, keepdim=True).clamp(min=1e-8)         
-    to_light_n = to_light / dist
+    dist_sq = torch.sum(to_light**2, dim=-1, keepdim=True).clamp(min=1e-8)
+    
+    is_area_light = hasattr(rel_light, 'light_type') and rel_light.light_type == 'area'
+    is_disk_shape = hasattr(rel_light, 'shape') and rel_light.shape == 'disk'
 
-    inv_sq = 1.0 / (4 * math.pi * dist.pow(2)) 
+    if is_area_light and is_disk_shape:
+        # -------------------------------------------------------------
+        # Vector Irradiance
+        # -------------------------------------------------------------
+        light_radius = rel_light.size if hasattr(rel_light, 'size') and rel_light.size > 0 else 0.5
+        R2 = light_radius ** 2
+        L = light_strength / (math.pi**2 * R2)
+        
+        # h: deeps under light area (y-direction of area light to gaussian)
+        h = torch.sum(to_light * -world_light_norm.unsqueeze(0), dim=-1, keepdim=True)
+        h2 = h**2
+        front_mask = h > 0
+        
+        # x0: radial distance to light center
+        x0_sq = torch.clamp(dist_sq - h2, min=1e-8)
+        x0 = torch.sqrt(x0_sq)
+        
+        # light term
+        term_inner = (dist_sq + R2)**2 - 4.0 * R2 * x0_sq
+        term_sqrt = torch.sqrt(torch.clamp(term_inner, min=1e-8))
+        
+        Ez = (math.pi * L / 2.0) * (1.0 - (dist_sq - R2) / term_sqrt)
+        Er_term = ((dist_sq + R2) / term_sqrt) - 1.0
+        x0_safe = torch.clamp(x0, min=1e-4)
+        Er_raw = (math.pi * L / 2.0) * (h / x0_safe) * Er_term
+        Er = torch.where(x0 > 1e-4, Er_raw, torch.zeros_like(Ez))
+        
+        # fitting light vector together
+        radial_vector = -to_light - (h * -world_light_norm.unsqueeze(0))
+        radial_dir = torch.nn.functional.normalize(radial_vector, p=2, dim=-1)
+        vector_irradiance = Ez * (-world_light_norm.unsqueeze(0)) + Er * radial_dir
+        
+        raw_irradiance = torch.sum(normalized_normals * vector_irradiance, dim=-1, keepdim=True)
+        irradiance = torch.clamp(raw_irradiance, min=0)
+        
+        # make all gaussians behind the light dark
+        irradiance = torch.where(front_mask, irradiance, torch.zeros_like(irradiance))
+        total_irradiance = irradiance.expand_as(gxyz)
 
-    raw_lambert = torch.sum(normalized_normals * to_light_n, dim=-1, keepdim=True)
-    lambert = torch.clamp(raw_lambert, min=0)
+    else:
+        # -------------------------------------------------------------
+        # STANDART POINTLIGHT
+        # -------------------------------------------------------------
+        dist = torch.sqrt(dist_sq)         
+        to_light_n = to_light / dist
+
+        inv_sq = 1.0 / (4 * math.pi * dist_sq) 
+
+        raw_lambert = torch.sum(normalized_normals * to_light_n, dim=-1, keepdim=True)
+        lambert = torch.clamp(raw_lambert, min=0)
+
+        # expand the brightness on all color channels
+        total_irradiance = (light_strength * inv_sq * lambert).expand_as(gxyz)
+    ### ========================================================== ###
 
     #clamp albedos since i can make solutions with negative albedos
-    clamped_albedo = torch.clamp(albedo, 0)
-
-    #expand the brightness on all color channels
-    total_irradiance = (light_strength * inv_sq * lambert).expand_as(gxyz)
+    clamped_albedo = torch.clamp(albedo, min=0.0, max=1.0)
     
     if only_brightness:
         net_color = total_irradiance
     else:
         brdf_diffuse = 1.0 / math.pi
         net_color = clamped_albedo * brdf_diffuse * total_irradiance    
-
+        #gamma correction for blender images
+        net_color = torch.clamp(net_color, min=1e-6) ** (1.0 / 2.2)
     return net_color
 
 def splinerender(
