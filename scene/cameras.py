@@ -19,9 +19,10 @@ from icecream import ic
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
-                 normals_image=None,unlit_image=None, brightness_image=None,
+                 normals_image=None,unlit_image=None, brightness_image=None, mask_image=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
-                 model=ProjectionType.PERSPECTIVE, distortion_params=None):
+                 model=ProjectionType.PERSPECTIVE, distortion_params=None,
+                 light=None):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -41,6 +42,16 @@ class Camera(nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
+        self.light = light #lpc
+        if self.light is not None:
+            self.light_rel_pos_cuda = torch.tensor(self.light.rel_pos, dtype=torch.float32, device=self.data_device)
+            self.light_rel_norm_cuda = torch.tensor(self.light.rel_norm, dtype=torch.float32, device=self.data_device)
+            self.light_size = self.light.size
+        else:
+            self.light_rel_pos_cuda = None
+            self.light_rel_norm_cuda = None
+
+
         self.original_image = image.clamp(0.0, 1.0).to(self.data_device)
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
@@ -59,7 +70,8 @@ class Camera(nn.Module):
             self.original_brightness = brightness_image.clamp(0.0, 1.0).to(self.data_device)
         else:
             self.original_brightness    
-
+        if mask_image is not None:
+             self.original_mask = mask_image.clamp(0.0, 1.0).to(self.data_device)
         if gt_alpha_mask is not None:
             self.original_image *= gt_alpha_mask.to(self.data_device)
             self.gt_alpha_mask = gt_alpha_mask

@@ -47,11 +47,13 @@ class CameraInfo(NamedTuple):
     normal_image_path :str
     unlit_image_path :str
     brightness_image_path :str
+    mask_image_path :str
     image_name: str
     width: int
     height: int
     model: ProjectionType
     distortion_params: Optional[dict]
+    light: Optional[LightInfo] = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -59,7 +61,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
-    light: Optional[LightInfo] = None
+    
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -84,7 +86,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path, light_dict):
     if os.path.isfile(metadata_path):
         with open(metadata_path, "r") as f:
             print("Loading metadata")
@@ -97,7 +99,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
     normals_folder = os.path.join(base_dir, "normals")
     unlit_folder = os.path.join(base_dir, "unlit")
     brightness_folder = os.path.join(base_dir, "brightness")
-
+    mask_folder = os.path.join(base_dir, "masks")
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
         sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
@@ -149,6 +151,9 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
 
         camera_brightness_path = os.path.join(brightness_folder, camera_folder)
         brightness_path = os.path.join(camera_brightness_path, os.path.basename(extr.name))
+
+        camera_mask_path = os.path.join(mask_folder, camera_folder)
+        mask_path = os.path.join(camera_mask_path, os.path.basename(extr.name))
         
         image_name = os.path.basename(image_path).split(".")[0]
 
@@ -158,10 +163,12 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path):
         
         image = None
 
+        cam_light = light_dict.get(extr.camera_id, None)
+
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, normal_image_path=normals_path,unlit_image_path=unlit_path, brightness_image_path=brightness_path,image_name=image_name, width=width,
+                              image_path=image_path, normal_image_path=normals_path,unlit_image_path=unlit_path, brightness_image_path=brightness_path,mask_image_path=mask_path,image_name=image_name, width=width,
                               height=height, model=model,
-                              distortion_params=distortion_params) 
+                              distortion_params=distortion_params, light=cam_light) 
         cam_infos.append(cam_info)
 
     sys.stdout.write('\n')
@@ -200,29 +207,27 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     light_file_path = os.path.join(path, "light_data.txt")
-    light_info = None
-    
+    lights_dict = {}
+
     if os.path.exists(light_file_path):
         try:
             with open(light_file_path, "r") as fid:                
                 _ = fid.readline() 
-                data_line = fid.readline()
-                if data_line:
-                    elems = [e.strip() for e in data_line.split(",")]
-                    l_type = elems[0]
-                    l_shape = elems[1]
-                    l_pos = np.array([float(elems[2]), float(elems[3]), float(elems[4])])
-                    l_norm = np.array([float(elems[5]), float(elems[6]), float(elems[7])])
-                    l_size = float(elems[8])
+                for data_line in fid:
+                    if not data_line.strip(): continue
                     
-                    light_info = LightInfo(
-                        light_type=l_type,
-                        shape=l_shape,
-                        rel_pos=l_pos,
-                        rel_norm=l_norm,
-                        size=l_size
+                    elems = [e.strip() for e in data_line.split(",")]
+                    cam_id = int(elems[0])
+                    
+                    lights_dict[cam_id] = LightInfo(
+                        light_type=elems[1],
+                        shape=elems[2],
+                        rel_pos=np.array([float(elems[3]), float(elems[4]), float(elems[5])]),
+                        rel_norm=np.array([float(elems[6]), float(elems[7]), float(elems[8])]),
+                        size=float(elems[9])
                     )
-            print(f"[Ever Loader] Loaded light info: {light_info.light_type} ({light_info.shape})")
+
+            print(f"[Ever Loader] Loaded light info for {len(lights_dict)} cameras.")
         except Exception as e:
             print(f"[Ever Loader] Error loading light data: {e}")
     else:
@@ -232,8 +237,9 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
-        base_dir=path,#images_folder=os.path.join(path, reading_dir),
-        metadata_path=os.path.join(path, "metadata.json"))
+        base_dir=path, 
+        metadata_path=os.path.join(path, "metadata.json"),
+        light_dict=lights_dict)
     
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
@@ -264,8 +270,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
-                           ply_path=ply_path,
-                           light=light_info)
+                           ply_path=ply_path)
     return scene_info
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):

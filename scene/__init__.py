@@ -79,23 +79,7 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         else:
             assert False, "Could not recognize scene type!"
-
-        self.light = getattr(scene_info, "light", None)
-        
-        if self.light is not None:
-            print(f"[Scene] Light loaded successfully:")
-            print(f"        Type: {self.light.light_type}, Shape: {self.light.shape}")
-            print(f"        Rel Pos: {self.light.rel_pos}, Size: {self.light.size}")
             
-            # GPU-Tensoren für schnellen Zugriff im Renderer bereithalten
-            self.light_rel_pos_cuda = torch.tensor(self.light.rel_pos, dtype=torch.float32, device="cuda")
-            self.light_rel_norm_cuda = torch.tensor(self.light.rel_norm, dtype=torch.float32, device="cuda")
-        else:
-            print("[Scene] Warning: No light information found in scene_info!")
-            self.light_rel_pos_cuda = None
-            self.light_rel_norm_cuda = None
-
-
         if not self.loaded_iter:
             with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:
                 dest_file.write(src_file.read())
