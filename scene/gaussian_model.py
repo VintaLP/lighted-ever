@@ -121,7 +121,7 @@ class GaussianModel:
         self.setup_functions(max_opacity)
         self.tmin = tmin
         self.light_strength = light_strength
-
+        self._scatter_intensity = torch.empty(0)
     def capture(self):
         return (
             self.active_sh_degree,
@@ -137,6 +137,7 @@ class GaussianModel:
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,            
+            self._scatter_intensity,
             self.tmin
         )
     
@@ -154,21 +155,24 @@ class GaussianModel:
             xyz_gradient_accum,
             denom,
             opt_dict,
-            self.spatial_lr_scale,            
+            self.spatial_lr_scale,   
+            _scatter_intensity,         
             self.tmin
         ) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
-
+        self._scatter_intensity = _scatter_intensity
 
     def get_scale_and_density_for_rendering(self) -> tuple[torch.Tensor, torch.Tensor]:
         opacity = self.opacity_activation(self._opacity)
         scaling = self.scaling_activation(self._scaling)
         density = get_minor_axis_density(opacity, scaling)
         return (scaling, density)
-
+    @property
+    def get_scatter_intensity(self):
+        return torch.sigmoid(self._scatter_intensity)
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)
@@ -231,7 +235,8 @@ class GaussianModel:
 
         # add points using sphere init
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-        
+        scatter_init = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")) #lpc
+
         if num_additional_pts > 0:
             center = torch.mean(fused_point_cloud, dim=0)
             sph_means, sph_scales, sph_quats, sph_densities, sph_feats = \
@@ -241,7 +246,9 @@ class GaussianModel:
             
             sph_colors = torch.ones((sph_means.shape[0], 3), device='cuda') * 0.5 #lpc
             fused_color = torch.cat([fused_color, sph_colors], dim=0) #lpc
-            
+
+            sph_scatter = inverse_sigmoid(0.1 * torch.ones((sph_means.shape[0], 1), dtype=torch.float, device="cuda")) #lpc
+            scatter_init = torch.cat([scatter_init, sph_scatter], dim=0) #lpc
             
             sph_scales = sph_scales.mean(dim=-1, keepdim=True).expand(-1, 3)
             scales = torch.cat([scales, sph_scales], dim=0).clip(min=self.min_prim_size, max=self.max_prim_size)
@@ -281,6 +288,8 @@ class GaussianModel:
         #-----------------------------------------------------------------------------------------------------
 
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self._scatter_intensity = nn.Parameter(scatter_init.requires_grad_(True)) # lpc
+
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.per_point_3d_filter_scale = torch.zeros(
             [scales.shape[0], 1], dtype=torch.float32, device='cuda'
@@ -317,6 +326,9 @@ class GaussianModel:
         # opacity
         opacities = inverse_sigmoid(0.5 * torch.ones((num_points, 1), dtype=torch.float32, device=device))
 
+        #scatter intensity
+        scatter_init = inverse_sigmoid(0.1 * torch.ones((num_points, 1), dtype=torch.float32, device=device))
+
         # normals
         normals_init = torch.stack([x, y, z], dim=-1)
 
@@ -332,7 +344,8 @@ class GaussianModel:
         self._albedo = nn.Parameter(fused_color.requires_grad_(True))
         self._normals = nn.Parameter(normals_init.detach().requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
-        
+        self._scatter_intensity = nn.Parameter(scatter_init.requires_grad_(True)) # lpc
+
         self.max_radii2D = torch.zeros((num_points), device=device)
         self.per_point_3d_filter_scale = torch.zeros([num_points, 1], dtype=torch.float32, device=device)
 
@@ -352,6 +365,7 @@ class GaussianModel:
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
+            {'params': [self._scatter_intensity], 'lr': training_args.scatter_intensity_lr, "name": "scatter_intensity"}, # lpc
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, betas=[0.9, 0.999])
@@ -380,6 +394,7 @@ class GaussianModel:
         #for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
         #    l.append('f_rest_{}'.format(i))
         l.append('opacity')
+        l.append('scatter_intensity')
         for i in range(self._scaling.shape[1]):
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
@@ -398,6 +413,7 @@ class GaussianModel:
         f_dc = self._features_dc.detach().flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().flatten(start_dim=1).contiguous().cpu().numpy()
         opacities = self._opacity.detach().cpu().numpy()
+        scatter = self._scatter_intensity.detach().cpu().numpy() #lpc
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
 
@@ -405,7 +421,7 @@ class GaussianModel:
 
         elements = np.empty((xyz.shape[0]), dtype=dtype_full)
         #attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, axis=1) 
-        attributes = np.concatenate((xyz, normals, albedo, normals, opacities, scale, rotation), axis=1) #lpc
+        attributes = np.concatenate((xyz, normals, albedo, normals, opacities, scatter, scale, rotation), axis=1) #lpc
         for i, (attribute, _) in enumerate(dtype_full):
             elements[attribute] = attributes[:, i]
         # elements[:] = list(map(tuple, attributes))
@@ -430,6 +446,7 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+        scatter = np.asarray(plydata.elements[0]["scatter_intensity"])[..., np.newaxis] #lpc
 
         #features_dc = np.zeros((xyz.shape[0], 3, 1))
         #features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -474,6 +491,7 @@ class GaussianModel:
         self._normals = nn.Parameter(torch.tensor(normals, dtype=torch.float, device="cuda").requires_grad_(True)) #lpc
         
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._scatter_intensity = nn.Parameter(torch.tensor(scatter, dtype=torch.float, device="cuda").requires_grad_(True)) # lpc
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
@@ -527,6 +545,8 @@ class GaussianModel:
         self._normals = optimizable_tensors["normals"] #lpc
         
         self._opacity = optimizable_tensors["opacity"]
+        self._scatter_intensity = optimizable_tensors["scatter_intensity"] # lpc
+
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
@@ -558,7 +578,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_albedo, new_normals, new_opacities, new_scaling, new_rotation):
+    def densification_postfix(self, new_xyz, new_albedo, new_normals, new_opacities, new_scatter, new_scaling, new_rotation):
         
         if torch.isnan(new_normals).any() or torch.isinf(new_normals).any():
             ic("ACHTUNG: Ungültige Werte in neuen SH-Normals erkannt!")
@@ -570,6 +590,7 @@ class GaussianModel:
         "albedo": new_albedo, #lpc
         "normals": new_normals, #lpc
         "opacity": new_opacities,
+        "scatter_intensity": new_scatter, # lpc
         "scaling" : new_scaling,
         "rotation" : new_rotation}
 
@@ -580,6 +601,7 @@ class GaussianModel:
         self._albedo = optimizable_tensors["albedo"] #lpc
         self._normals = optimizable_tensors["normals"] #lpc  
         self._opacity = optimizable_tensors["opacity"]
+        self._scatter_intensity = optimizable_tensors["scatter_intensity"] #lpc
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
@@ -623,8 +645,8 @@ class GaussianModel:
         density = inv_opacity(self.opacity_activation(self._opacity[selected_pts_mask])).reshape(minor_axis.shape) / minor_axis
         minor_opacity = (1 - (-density * minor_axis).exp()).clip(min=0)
         new_opacity = self.inverse_opacity_activation(minor_opacity / 2).repeat(N,1)
-
-        self.densification_postfix(new_xyz, new_albedo, new_normals, new_opacity, new_scaling, new_rotation) #lpc
+        new_scatter = self._scatter_intensity[selected_pts_mask].repeat(N,1) # lpc
+        self.densification_postfix(new_xyz, new_albedo, new_normals, new_opacity, new_scatter,new_scaling, new_rotation) #lpc
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -637,6 +659,7 @@ class GaussianModel:
         selected_pts_mask = selected_pts_mask & size_mask
 
         new_opacity = self.inverse_opacity_activation(self.opacity_activation(self._opacity[selected_pts_mask]) / 2)
+        new_scatter = self._scatter_intensity[selected_pts_mask] # lpc
         new_xyz = self._xyz[selected_pts_mask]
         #new_features_dc = self._features_dc[selected_pts_mask]
         #new_features_rest = self._features_rest[selected_pts_mask]
@@ -646,7 +669,7 @@ class GaussianModel:
         new_albedo = self._albedo[selected_pts_mask] #lpc
         new_normals = self._normals[selected_pts_mask] #lpc
 
-        self.densification_postfix(new_xyz, new_albedo, new_normals, new_opacity, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_albedo, new_normals, new_opacity,new_scatter, new_scaling, new_rotation)
         print(
             f"Cloned {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()}. Max gradient: {grads.max()}"
         )

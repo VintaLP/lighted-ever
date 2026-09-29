@@ -1,0 +1,1 @@
+Camera_X, Camera_Y, Camera_Z | Light_X, Light_Y, Light_Z

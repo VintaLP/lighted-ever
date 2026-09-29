@@ -529,9 +529,21 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 masked_brightness_psnr_test /= len(config['cameras'])      
                 masked_brightness_l1_test /= len(config['cameras'])
 
+                # Lighted (Standard)
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], lighted_l1_test, lighted_psnr_test))
-
-
+                print("[ITER {}] Evaluating {}_masked: L1 {} PSNR {}".format(iteration, config['name'], masked_lighted_l1_test, masked_lighted_psnr_test))
+                
+                # Unlit
+                print("[ITER {}] Evaluating {}_unlit: L1 {} PSNR {}".format(iteration, config['name'], unlit_l1_test, unlit_psnr_test))
+                print("[ITER {}] Evaluating {}_unlit_masked: L1 {} PSNR {}".format(iteration, config['name'], masked_unlit_l1_test, masked_unlit_psnr_test))
+                
+                # Normals
+                print("[ITER {}] Evaluating {}_normals: L1 {} PSNR {}".format(iteration, config['name'], normals_l1_test, normals_psnr_test))
+                print("[ITER {}] Evaluating {}_normals_masked: L1 {} PSNR {}".format(iteration, config['name'], masked_normals_l1_test, masked_normals_psnr_test))
+                
+                # Brightness
+                print("[ITER {}] Evaluating {}_brightness: L1 {} PSNR {}".format(iteration, config['name'], brightness_l1_test, brightness_psnr_test))
+                print("[ITER {}] Evaluating {}_brightness_masked: L1 {} PSNR {}".format(iteration, config['name'], masked_brightness_l1_test, masked_brightness_psnr_test))
 
 
 
@@ -587,12 +599,10 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-   
-
-    if not args.start_checkpoint.endswith(".pth"):
+    if args.start_checkpoint and not args.start_checkpoint.endswith(".pth"):
         args.start_checkpoint += ".pth"
     
-    if args.start_checkpoint.endswith("None.pth"): 
+    if args.start_checkpoint and args.start_checkpoint.endswith("None.pth"): 
         args.start_checkpoint = None
 
     if args.start_checkpoint and not os.path.exists(args.start_checkpoint):

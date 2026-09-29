@@ -296,10 +296,11 @@ def add_normal_frame_to_tensorboard(pc, iteration, writer):
     writer.add_image('Normalen_Visualisierung', img_chw, iteration)
     plt.close(fig)
 
-def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, point_normals_to_origin=False):
+def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, point_normals_to_origin=False, calculate_spectical_light=False, add_transparent_shading=False):
     gxyz = pc.get_xyz    
     albedo = pc.get_albedo
     device = gxyz.device
+    opacity = pc.get_opacity
 
     if rel_light is None:
         return albedo if not only_brightness else torch.zeros_like(gxyz)
@@ -343,6 +344,10 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
     is_area_light = hasattr(rel_light, 'light_type') and rel_light.light_type == 'area'
     is_disk_shape = hasattr(rel_light, 'shape') and rel_light.shape == 'disk'
 
+    #proprecessing for specular light
+    camera_pos = c2w_matrix[:3, 3]
+    view_dir = torch.nn.functional.normalize(camera_pos.unsqueeze(0) - gxyz, p=2, dim=-1)
+
     if is_area_light and is_disk_shape:
         # -------------------------------------------------------------
         # Vector Irradiance
@@ -382,16 +387,19 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
         irradiance = torch.where(front_mask, irradiance, torch.zeros_like(irradiance))
         total_irradiance = irradiance.expand_as(gxyz)
 
+
+        light_dir_for_spec = torch.nn.functional.normalize(to_light, p=2, dim=-1)
+
     else:
         # -------------------------------------------------------------
         # STANDART POINTLIGHT
         # -------------------------------------------------------------
         dist = torch.sqrt(dist_sq)         
-        to_light_n = to_light / dist
+        light_dir_for_spec = to_light / dist # to_light_n
 
         inv_sq = 1.0 / (4 * math.pi * dist_sq) 
 
-        raw_lambert = torch.sum(normalized_normals * to_light_n, dim=-1, keepdim=True)
+        raw_lambert = torch.sum(normalized_normals * light_dir_for_spec, dim=-1, keepdim=True)
         lambert = torch.clamp(raw_lambert, min=0)
 
         # expand the brightness on all color channels
@@ -402,10 +410,31 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
     clamped_albedo = torch.clamp(albedo, min=0.0, max=1.0)
     
     if only_brightness:
-        net_color = total_irradiance
+        net_color = total_irradiance #* opacity
     else:
         brdf_diffuse = 1.0 / math.pi
-        net_color = clamped_albedo * brdf_diffuse * total_irradiance    
+        diffuse_color = clamped_albedo * brdf_diffuse * total_irradiance
+        scatter_intensity =  pc.get_scatter_intensity
+        unlit_color = clamped_albedo * scatter_intensity
+
+        #interpolate between diffuse color when opacity 100% and unlit_color when low density
+        if add_transparent_shading:
+            shaded_color = torch.lerp(unlit_color, diffuse_color, opacity)
+        else:
+            shaded_color = diffuse_color
+        half_vector = torch.nn.functional.normalize(light_dir_for_spec + view_dir, p=2, dim=-1)
+        specular_power = 32.0 #roughness of object. high makes sharp secular light, low smooth specular light
+        specular_intensity = 0.5
+
+        N_dot_H = torch.clamp(torch.sum(normalized_normals * half_vector, dim=-1, keepdim=True), min=0.0)
+        specular_term = (N_dot_H ** specular_power) * specular_intensity
+
+        specular_color = specular_term.expand_as(gxyz)
+        if calculate_spectical_light:
+            net_color = shaded_color
+        else:
+            net_color = shaded_color + specular_color
+
         #gamma correction for blender images
         net_color = torch.clamp(net_color, min=1e-6) ** (1.0 / 2.2)
     return net_color
@@ -445,7 +474,7 @@ def splinerender(
             #add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
     elif(mode=="no_lighting"):
-        net_color = pc.get_albedo * ambient_intensity #* 0.05 #lpc
+        net_color = pc.get_albedo * ambient_intensity #*pc.get_opacity #* 0.05 #lpc
     elif(mode=="only_brightness"):
         net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
     elif(mode=="normals"):
@@ -453,6 +482,7 @@ def splinerender(
         norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8) #lpc
         normalized_normals = normals / norm #lpc
         net_color = (normalized_normals + 1.0) * 0.5 #lpc
+        net_color = net_color #* pc.get_opacity
     elif(mode=="debug"):
         import pdb
         import rlcompleter
