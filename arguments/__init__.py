@@ -119,6 +119,7 @@ class OptimizationParams(ParamGroup):
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.scatter_intensity_lr = 0.005
+        self.light_pos_lr = 0.001
 
         self.min_split_opacity = 0.01
 

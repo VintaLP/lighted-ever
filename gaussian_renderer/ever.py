@@ -312,21 +312,55 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
         if hasattr(view, 'camera_center') and view.camera_center is not None:
             c2w_matrix[3, :3] = torch.tensor(view.camera_center, dtype=torch.float32, device=device)
 
-    rel_pos = torch.tensor(rel_light.rel_pos, dtype=torch.float32, device=device)
+    # -------------------------------------------------------------
+    # ONE LEARNABLE PARAMETER (Rig-based lighting with baseline offset)
+    # -------------------------------------------------------------
+    # 1. Gelernten Parameter laden
+    learned_rel_light_pos = pc.get_rel_light_pos
+    
+    # 2. Vorberechneten Offset direkt aus der Kamera abrufen (Fallback auf 0)
+    baseline_offset_pos = getattr(view, "light_baseline_pos", torch.zeros(3, device=device))
+    
+    # 3. Addieren
+    final_rel_pos = learned_rel_light_pos + baseline_offset_pos
+    
     flip_matrix = torch.tensor([1.0, -1.0, -1.0], device=device)
-    rel_pos_opencv = rel_pos * flip_matrix
-
+    rel_pos_opencv = final_rel_pos * flip_matrix
     rel_pos_homo = torch.cat([rel_pos_opencv, torch.tensor([1.0], device=device)])
     world_light_pos = (rel_pos_homo @ c2w_matrix)[:3]
 
-    #transform light_normal for area light ------------
     if hasattr(rel_light, 'rel_norm'):
-        rel_norm = torch.tensor(rel_light.rel_norm, dtype=torch.float32, device=device)
-        rel_norm_opencv = rel_norm * flip_matrix
+        learned_rel_light_norm = pc.get_rel_light_norm
+        baseline_offset_norm = getattr(view, "light_baseline_norm", torch.zeros(3, device=device))
+        
+        final_rel_norm = learned_rel_light_norm + baseline_offset_norm
+        rel_norm_opencv = final_rel_norm * flip_matrix
         rel_norm_homo = torch.cat([rel_norm_opencv, torch.tensor([0.0], device=device)])
         world_light_norm = torch.nn.functional.normalize((rel_norm_homo @ c2w_matrix)[:3], dim=0)
     else:
         world_light_norm = torch.tensor([0.0, -1.0, 0.0], device=device)
+    # -------------------------------------------------------------
+        
+    # rel_pos = torch.tensor(rel_light.rel_pos, dtype=torch.float32, device=device)
+    # #rel_pos = pc.get_rel_light_pos
+    
+    # # Fallback für alte Runs oder wenn das Modell aus einer reinen .ply geladen wurde
+    # if rel_pos is None or rel_pos.numel() == 0:
+    #     rel_pos = torch.tensor(rel_light.rel_pos, dtype=torch.float32, device=device)
+        
+    # flip_matrix = torch.tensor([1.0, -1.0, -1.0], device=device)
+    # rel_pos_opencv = rel_pos * flip_matrix
+    # rel_pos_homo = torch.cat([rel_pos_opencv, torch.tensor([1.0], device=device)])
+    # world_light_pos = (rel_pos_homo @ c2w_matrix)[:3]
+
+    # #transform light_normal for area light ------------
+    # if hasattr(rel_light, 'rel_norm'):
+    #     rel_norm = torch.tensor(rel_light.rel_norm, dtype=torch.float32, device=device)
+    #     rel_norm_opencv = rel_norm * flip_matrix
+    #     rel_norm_homo = torch.cat([rel_norm_opencv, torch.tensor([0.0], device=device)])
+    #     world_light_norm = torch.nn.functional.normalize((rel_norm_homo @ c2w_matrix)[:3], dim=0)
+    # else:
+    #     world_light_norm = torch.tensor([0.0, -1.0, 0.0], device=device)
     #--------------------------------------------------------
     if point_normals_to_origin:
         raw_normals = torch.nn.functional.normalize(gxyz, p=2, dim=1)
@@ -345,7 +379,7 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
     is_disk_shape = hasattr(rel_light, 'shape') and rel_light.shape == 'disk'
 
     #proprecessing for specular light
-    camera_pos = c2w_matrix[:3, 3]
+    camera_pos = c2w_matrix[3, :3] # FIXED: transposed matrix translation is in row 3, not column 3
     view_dir = torch.nn.functional.normalize(camera_pos.unsqueeze(0) - gxyz, p=2, dim=-1)
 
     if is_area_light and is_disk_shape:
@@ -431,9 +465,9 @@ def compute_comoving_light_color(pc, view, rel_light, only_brightness=False, poi
 
         specular_color = specular_term.expand_as(gxyz)
         if calculate_spectical_light:
-            net_color = shaded_color
-        else:
             net_color = shaded_color + specular_color
+        else:
+            net_color = shaded_color 
 
         #gamma correction for blender images
         net_color = torch.clamp(net_color, min=1e-6) ** (1.0 / 2.2)
@@ -473,9 +507,9 @@ def splinerender(
             add_normal_frame_to_tensorboard(pc, debug_iteration, writer)            #debug_visualize_light_normals(pc)    
             #add_normal_frame_to_video(pc, debug_iteration)
         net_color = compute_comoving_light_color(pc, view, light_tensor) #lpc
-    elif(mode=="no_lighting"):
+    elif(mode=="unlit"):
         net_color = pc.get_albedo * ambient_intensity #*pc.get_opacity #* 0.05 #lpc
-    elif(mode=="only_brightness"):
+    elif(mode=="brightness"):
         net_color = compute_comoving_light_color(pc,view,light_tensor,True)    
     elif(mode=="normals"):
         normals = pc.get_normals
@@ -488,6 +522,8 @@ def splinerender(
         import rlcompleter
         pdb.Pdb.complete=rlcompleter.Completer(locals()).complete
         pdb.set_trace()
+    else:
+        print("WRONG MODE DONT RENDER!")    
     rendered_features = RGB2SH(net_color).reshape(-1, 1, 3) #lpc
 
     tmin = pc.tmin if tmin is None else tmin

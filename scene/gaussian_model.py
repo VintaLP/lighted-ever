@@ -122,6 +122,14 @@ class GaussianModel:
         self.tmin = tmin
         self.light_strength = light_strength
         self._scatter_intensity = torch.empty(0)
+        self._rel_light_pos = torch.empty(0)
+        self._rel_light_norm = torch.empty(0)
+
+    def set_initial_light_data(self, initial_rel_light_pos, initial_rel_light_norm):
+        """Sets the starting relative light position/normal."""
+        self._rel_light_pos = nn.Parameter(torch.tensor(initial_rel_light_pos, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._rel_light_norm = nn.Parameter(torch.tensor(initial_rel_light_norm, dtype=torch.float, device="cuda").requires_grad_(True))
+    
     def capture(self):
         return (
             self.active_sh_degree,
@@ -138,6 +146,8 @@ class GaussianModel:
             self.optimizer.state_dict(),
             self.spatial_lr_scale,            
             self._scatter_intensity,
+            self._rel_light_pos,
+            self._rel_light_norm,
             self.tmin
         )
     
@@ -156,7 +166,9 @@ class GaussianModel:
             denom,
             opt_dict,
             self.spatial_lr_scale,   
-            _scatter_intensity,         
+            _scatter_intensity,
+            _rel_light_pos,
+            _rel_light_norm,
             self.tmin
         ) = model_args
         self.training_setup(training_args)
@@ -164,15 +176,28 @@ class GaussianModel:
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
         self._scatter_intensity = _scatter_intensity
+        self._rel_light_pos = _rel_light_pos
+        self._rel_light_norm = _rel_light_norm
 
     def get_scale_and_density_for_rendering(self) -> tuple[torch.Tensor, torch.Tensor]:
         opacity = self.opacity_activation(self._opacity)
         scaling = self.scaling_activation(self._scaling)
         density = get_minor_axis_density(opacity, scaling)
         return (scaling, density)
+
     @property
     def get_scatter_intensity(self):
         return torch.sigmoid(self._scatter_intensity)
+    
+    @property
+    def get_rel_light_pos(self):
+        return self._rel_light_pos
+
+    @property
+    def get_rel_light_norm(self):
+        # We enforce normalization so the network learns a pure directional vector
+        return torch.nn.functional.normalize(self._rel_light_norm, p=2, dim=-1)
+    
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)
@@ -188,9 +213,11 @@ class GaussianModel:
     @property
     def get_xyz(self):
         return self._xyz
+
     @property
     def get_light_strength(self):
         return self.light_strength
+   
     @property
     def get_features(self):
         features_dc = self.feature_activation(self._features_dc)
@@ -267,7 +294,6 @@ class GaussianModel:
         num_points = fused_point_cloud.shape[0] #lpc
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
-       
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(raw_scales.requires_grad_(True))
@@ -366,6 +392,8 @@ class GaussianModel:
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': [self._scatter_intensity], 'lr': training_args.scatter_intensity_lr, "name": "scatter_intensity"}, # lpc
+            {'params': [self._rel_light_pos], 'lr': training_args.light_pos_lr, "name": "light_pos"}, #lpc
+            {'params': [self._rel_light_norm], 'lr': training_args.light_pos_lr, "name": "light_norm"}, #lpc
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, betas=[0.9, 0.999])
@@ -446,8 +474,13 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
-        scatter = np.asarray(plydata.elements[0]["scatter_intensity"])[..., np.newaxis] #lpc
-
+        property_names = [p.name for p in plydata.elements[0].properties] #lpc
+        if "scatter_intensity" in property_names:
+            scatter = np.asarray(plydata.elements[0]["scatter_intensity"])[..., np.newaxis]
+        else:
+            print("[INFO] Altes Modell erkannt: 'scatter_intensity' fehlt. Setze Standardwert.")
+            # inverse_sigmoid(0.5) = 0.0
+            scatter = np.zeros((xyz.shape[0], 1))
         #features_dc = np.zeros((xyz.shape[0], 3, 1))
         #features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
         #features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
@@ -518,6 +551,8 @@ class GaussianModel:
     def _prune_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            if group["name"] in ["light_pos", "light_norm"]:
+                continue
             stored_state = self.optimizer.state.get(group['params'][0], None)
             if stored_state is not None:
                 if "exp_avg" in stored_state:
@@ -558,6 +593,8 @@ class GaussianModel:
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            if group["name"] in ["light_pos", "light_norm"]:
+                continue
             assert len(group["params"]) == 1
             extension_tensor = tensors_dict[group["name"]]
             stored_state = self.optimizer.state.get(group['params'][0], None)

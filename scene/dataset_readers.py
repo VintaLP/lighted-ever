@@ -61,6 +61,8 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
+    global_light_pos: Optional[np.ndarray] = None
+    global_light_norm: Optional[np.ndarray] = None
     
 
 def getNerfppNorm(cam_info):
@@ -174,6 +176,58 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, base_dir, metadata_path, l
     sys.stdout.write('\n')
     return cam_infos
 
+def compute_and_verify_global_light(cam1: CameraInfo, cam2: CameraInfo):
+    """
+    Calculates the global world coordinate and normal of the light and verifies it
+    against a second camera using numpy matrices.
+    """
+    def get_world_light_data(cam):
+        if cam.light is None:
+            return None, None
+            
+        W2C = getWorld2View2(cam.R, cam.T)
+        C2W = np.linalg.inv(W2C)
+        flip_matrix = np.array([1.0, -1.0, -1.0])
+        
+        # 1. Position
+        rel_pos_opencv = cam.light.rel_pos * flip_matrix
+        rel_pos_homo = np.append(rel_pos_opencv, 1.0)
+        world_light_pos = (C2W @ rel_pos_homo)[:3]
+        
+        # 2. Normal (Only rotated, not translated -> C2W[:3, :3])
+        rel_norm_opencv = cam.light.rel_norm * flip_matrix
+        C2W_rot = C2W[:3, :3]
+        world_light_norm = C2W_rot @ rel_norm_opencv
+        world_light_norm = world_light_norm / np.linalg.norm(world_light_norm) # normalize
+        
+        return world_light_pos, world_light_norm
+
+    pos1, norm1 = get_world_light_data(cam1)
+    pos2, norm2 = get_world_light_data(cam2)
+    
+    if pos1 is None or pos2 is None:
+        return None, None
+        
+    print("\n--- Light Data Verification ---")
+    print(f"Global pos (Cam 1): {pos1.tolist()}")
+    print(f"Global pos (Cam 2): {pos2.tolist()}")
+    print(f"Global norm (Cam 1): {norm1.tolist()}")
+    print(f"Global norm (Cam 2): {norm2.tolist()}")
+    
+    diff_pos = np.linalg.norm(pos1 - pos2)
+    diff_norm = np.linalg.norm(norm1 - norm2)
+    
+    print(f"Deviation Position: {diff_pos:.6f}")
+    print(f"Deviation Normal:   {diff_norm:.6f}")
+    
+    if diff_pos > 1e-3 or diff_norm > 1e-3:
+        print("[WARNING] The global light data differs significantly!")
+    else:
+        print("[INFO] Verification successful. Both cameras yield the exact same world data.")
+    print("----------------------------------\n")
+    
+    return pos1, norm1
+
 def fetchPly(path):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
@@ -243,6 +297,14 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
     
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
+    global_light_pos = None
+    global_light_norm = None # <-- Add this variable
+    if len(cam_infos) >= 2:
+        global_light_pos, global_light_norm = compute_and_verify_global_light(cam_infos[0], cam_infos[1])
+    elif len(cam_infos) == 1:
+        # Fallback in case there is only one camera for testing purposes
+        global_light_pos, global_light_norm = compute_and_verify_global_light(cam_infos[0], cam_infos[0])
+
     if eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
@@ -270,7 +332,8 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, rig=True):
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+                           ply_path=ply_path,
+                           global_light_pos=global_light_pos)
     return scene_info
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
@@ -332,7 +395,8 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+                           ply_path=ply_path,
+                           global_light_norm=global_light_norm)
     return scene_info
 
 sceneLoadTypeCallbacks = {

@@ -55,11 +55,75 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
+def plot_light_trajectory(light_positions, output_dir, tb_writer=None):
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    positions = np.array(light_positions) # Shape: (N, 3)
+    
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], 
+            marker='o', linestyle='-', color='orange', alpha=0.6, label='Licht Pfad')
+    
+    ax.scatter(*positions[0], color='red', s=100, label='Start', zorder=5)
+    ax.scatter(*positions[-1], color='green', s=100, label='Ende (Final)', zorder=5)
+    
+    ax.scatter(0, 0, 0, color='blue', s=100, marker='^', label='Kamera (Referenz)')
+    
+    ax.quiver(0, 0, 0, 0, 0, 1, length=0.5, color='blue', label='Blickrichtung')
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Wanderung der relativen Lichtposition über die Iterationen')
+    ax.legend()
+    
+    plt.tight_layout()
+    
+    # Speichern als PNG im Output-Ordner
+    save_path = os.path.join(output_dir, "light_trajectory.png")
+    fig.savefig(save_path)
+    print(f"\n[INFO] 3D-Plot der Lichtposition gespeichert unter: {save_path}")
+    
+    # In TensorBoard hochladen
+    if tb_writer:
+        fig.canvas.draw()
+        img = np.asarray(fig.canvas.buffer_rgba())[..., :3]
+        tb_writer.add_image("Light/Trajectory", img, global_step=len(light_positions), dataformats="HWC")
+        
+    plt.close(fig)
+
+
 def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelineParams, testing_iterations : List[int], saving_iterations : List[int], checkpoint_iterations : List[int], checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, light_strength=dataset.light_strength)
     scene = Scene(dataset, gaussians, shuffle=True)
+
+    train_cameras = scene.getTrainCameras()
+    if len(train_cameras) > 0 and hasattr(train_cameras[0], "light") and train_cameras[0].light is not None:
+        master_cam = train_cameras[0]
+        gaussians.set_initial_light_data(master_cam.light.rel_pos, master_cam.light.rel_norm)
+        
+        # --- NEU: Baseline-Offsets einmalig vorberechnen und in den Kameras speichern ---
+        master_pos = torch.tensor(master_cam.light.rel_pos, dtype=torch.float32)
+        master_norm = torch.tensor(master_cam.light.rel_norm, dtype=torch.float32) if hasattr(master_cam.light, 'rel_norm') else None
+
+        # Für alle Kameras (Train & Test) den physischen Abstand zur Master-Kamera speichern
+        all_cameras = scene.getTrainCameras() + scene.getTestCameras()
+        for cam in all_cameras:
+            if hasattr(cam, "light") and cam.light is not None:
+                cam_pos = torch.tensor(cam.light.rel_pos, dtype=torch.float32)
+                cam.light_baseline_pos = (cam_pos - master_pos).cuda()
+                
+                if master_norm is not None and hasattr(cam.light, 'rel_norm'):
+                    cam_norm = torch.tensor(cam.light.rel_norm, dtype=torch.float32)
+                    cam.light_baseline_norm = (cam_norm - master_norm).cuda()
+    else:
+        gaussians.set_initial_light_data([0.0, 0.0, 0.0], [0.0, -1.0, 0.0])
+
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -105,6 +169,9 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
 
     #compute_all_light_positions(scene.getTrainCameras(),scene.light_offset)
 
+    tracked_light_positions = []
+    light_track_interval = max(1, opt.iterations // 20)
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -113,7 +180,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                 net_image_bytes = None
                 # custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 
-                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer, light_strength, ambient_light, light_switch, normals, only_brightness, normal_cloud = network_gui.receive()
+                custom_cam, do_training, show_unlit, switch_camera, keep_alive, scaling_modifer, light_strength, ambient_light, light_switch, normals, brightness, normal_cloud = network_gui.receive()
                 if custom_cam != None:
                     if not hasattr(custom_cam, 'R'):
                         custom_cam.R = custom_cam.world_view_transform[:3, :3].detach().cpu().numpy()
@@ -155,10 +222,10 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
 
                     if normals:
                         mode = "normals"
-                    elif only_brightness:
-                        mode = "only_brightness"
+                    elif brightness:
+                        mode = "brightness"
                     else:
-                        mode=("no_lighting" if light_switch else "lighted")
+                        mode=("unlit" if light_switch else "lighted")
 
                     
                     gaussians.light_strength =  int(light_strength)
@@ -191,6 +258,15 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
 
         iter_start.record()
 
+        if iteration == 1 or iteration % light_track_interval == 0 or iteration == opt.iterations:
+            with torch.no_grad():
+                current_pos = gaussians.get_rel_light_pos.detach().cpu().numpy().copy()
+                tracked_light_positions.append(current_pos)
+                
+                if tb_writer:
+                    tb_writer.add_scalar('Light_Position_Live/X', current_pos[0], iteration)
+                    tb_writer.add_scalar('Light_Position_Live/Y', current_pos[1], iteration)
+                    tb_writer.add_scalar('Light_Position_Live/Z', current_pos[2], iteration)
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
@@ -207,7 +283,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
 
         light = getattr(viewpoint_cam, "light", None) #lpc
         if iteration < 1:
-            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer, mode="no_lighting")
+            render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer, mode="unlit")
         else:
             render_pkg = splinerender(viewpoint_cam, gaussians,pipe,light, random=not opt.center_pixel, debug_iteration=iteration, writer=tb_writer)   
         image, densification_metric, visibility_filter, radii = render_pkg["render"], render_pkg["densification_metric"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -304,6 +380,8 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                 save_path = os.path.join(checkpoint_dir, f"checkpoint_{iteration}.pth")
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), save_path)
+    if len(tracked_light_positions) > 0:
+        plot_light_trajectory(tracked_light_positions, dataset.model_path, tb_writer)            
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -452,14 +530,14 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 for idx, viewpoint in enumerate(config['cameras']):
                     light = getattr(viewpoint, "light", None)
                     render_pkg = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer)
-                    not_lighted = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="no_lighting")
-                    only_brightness = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="only_brightness")
+                    not_lighted = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="unlit")
+                    brightness = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="brightness")
                     normals = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="normals")
                     
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0) #lpc
                     nl_image = torch.clamp(not_lighted["render"], 0.0, 1.0)
                     n_image = torch.clamp(normals["render"], 0.0, 1.0)
-                    ob_image = torch.clamp(only_brightness["render"], 0.0, 1.0)
+                    ob_image = torch.clamp(brightness["render"], 0.0, 1.0)
 
                     gt_lighted_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     gt_unlit_image = torch.clamp(viewpoint.original_unlit.to("cuda"), 0.0, 1.0)
@@ -470,7 +548,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         #debug = renderFunc(viewpoint, scene.gaussians, pipe, light, random=False, writer=tb_writer, mode="debug")
                     if tb_writer and (idx < 5):
                         
-                        tb_writer.add_images(config['name'] + "_view_{}/only_brightness_render".format(viewpoint.image_name), ob_image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/brightness_render".format(viewpoint.image_name), ob_image[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + "_view_{}/lighted_render".format(viewpoint.image_name), image[None], global_step=iteration)     
                         
                         tb_writer.add_images(config['name'] + "_view_{}/normal_render".format(viewpoint.image_name), n_image[None], global_step=iteration)
